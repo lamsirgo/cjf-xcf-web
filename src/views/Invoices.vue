@@ -1,6 +1,10 @@
 <template>
   <div class="page">
-    <van-nav-bar title="发票库" left-arrow @click-left="$router.back()" />
+    <van-nav-bar title="发票库" left-arrow @click-left="$router.back()">
+      <template #right>
+        <span class="manage-entry" @click="toggleManage">{{ manageMode ? '完成' : '管理' }}</span>
+      </template>
+    </van-nav-bar>
     <div class="filter-bar">
       <van-search v-model="keywords" placeholder="搜索发票号码/购买方/销售方" @search="onSearch" />
       <div class="filter-row">
@@ -22,7 +26,7 @@
       </div>
     </div>
 
-    <div class="list-wrap">
+    <div class="list-wrap" :class="{ 'with-bar': manageMode }">
       <van-list
         v-model:loading="loading"
         v-model:error="loadError"
@@ -31,10 +35,22 @@
         error-text="加载失败，点击重试"
         @load="onLoad"
       >
-        <div v-for="inv in list" :key="inv.id" class="inv-card" :class="{ dup: inv.duplicate }" @click="$router.push(`/app/invoice/${inv.id}`)">
+        <div
+          v-for="inv in list"
+          :key="inv.id"
+          class="inv-card"
+          :class="{ dup: inv.duplicate, selected: manageMode && selectedIds.has(inv.id) }"
+          @click="onCardClick(inv)"
+        >
+          <van-icon
+            v-if="manageMode"
+            :name="selectedIds.has(inv.id) ? 'success' : 'circle'"
+            class="check-icon"
+            :class="{ active: selectedIds.has(inv.id) }"
+          />
           <div class="row1">
             <span class="no">{{ inv.invoice_num || '（无号码）' }}</span>
-            <span class="amount">¥{{ inv.total_amount.toFixed(2) }}</span>
+            <span class="amount">¥{{ Number(inv.total_amount ?? 0).toFixed(2) }}</span>
           </div>
           <div class="row2">{{ inv.seller_name || '—' }} → {{ inv.purchaser_name || '—' }}</div>
           <div class="row3">
@@ -44,6 +60,21 @@
           </div>
         </div>
       </van-list>
+    </div>
+
+    <!-- 批量管理底栏：软删除发票 -->
+    <div v-if="manageMode" class="manage-bar van-safe-area-bottom">
+      <van-button size="small" plain @click="toggleSelectAll">
+        {{ allSelected ? '取消全选' : '全选' }}
+      </van-button>
+      <van-button
+        size="small"
+        type="danger"
+        :disabled="selectedIds.size === 0"
+        @click="onBatchDelete"
+      >
+        删除{{ selectedIds.size ? `（${selectedIds.size}）` : '' }}
+      </van-button>
     </div>
 
     <van-calendar
@@ -68,8 +99,11 @@
 
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { showToast } from 'vant'
-import { listInvoices, type InvoiceRow } from '@/api/invoices'
+import { useRouter } from 'vue-router'
+import { showConfirmDialog, showToast } from 'vant'
+import { deleteInvoices, listInvoices, type InvoiceRow } from '@/api/invoices'
+
+const router = useRouter()
 
 const keywords = ref('')
 const result = ref('')
@@ -114,7 +148,10 @@ function pad(n: number) {
 /** 时分秒全为 0 时只显示 YYYY-MM-DD，否则显示到秒 */
 function fmtDateTime(s: string) {
   if (!s) return '日期未知'
-  const d = new Date(s)
+  // 后端 date 类型序列化为纯日期 "YYYY-MM-DD"：直接 new Date 会按 UTC 零点解析，
+  // 东八区显示成前一天。纯日期补本地 00:00:00 按本地时区解析
+  const local = /^\d{4}-\d{2}-\d{2}$/.test(s) ? `${s}T00:00:00` : s
+  const d = new Date(local)
   if (Number.isNaN(d.getTime())) return s
   const day = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
   if (d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0) return day
@@ -200,8 +237,59 @@ function onSearch() {
   finished.value = false
   loadError.value = false
   list.value = []
+  selectedIds.value = new Set()
   loading.value = true
   load()
+}
+
+// ---------- 批量管理（软删除）----------
+const manageMode = ref(false)
+const selectedIds = ref<Set<number>>(new Set())
+const allSelected = computed(() => list.value.length > 0 && list.value.every((inv) => selectedIds.value.has(inv.id)))
+
+function toggleManage() {
+  manageMode.value = !manageMode.value
+  selectedIds.value = new Set()
+}
+
+function onCardClick(inv: InvoiceRow) {
+  if (manageMode.value) {
+    const next = new Set(selectedIds.value)
+    if (next.has(inv.id)) next.delete(inv.id)
+    else next.add(inv.id)
+    selectedIds.value = next
+    return
+  }
+  router.push(`/app/invoice/${inv.id}`)
+}
+
+function toggleSelectAll() {
+  if (allSelected.value) selectedIds.value = new Set()
+  else selectedIds.value = new Set(list.value.map((inv) => inv.id))
+}
+
+async function onBatchDelete() {
+  const ids = [...selectedIds.value]
+  if (!ids.length) return
+  try {
+    await showConfirmDialog({
+      title: '删除发票',
+      message: `确定删除选中的 ${ids.length} 张发票吗？删除后不可恢复。`,
+      confirmButtonText: '删除',
+      confirmButtonColor: '#ee0a24',
+    })
+  } catch {
+    return // 取消
+  }
+  try {
+    const res = await deleteInvoices(ids)
+    showToast(`已删除 ${res.deleted ?? ids.length} 张`)
+    manageMode.value = false
+    selectedIds.value = new Set()
+    onSearch()
+  } catch {
+    /* 拦截器已提示 */
+  }
 }
 </script>
 
@@ -287,11 +375,30 @@ function onSearch() {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
-.inv-card { background: #fff; border-radius: 8px; margin: 10px; padding: 12px; cursor: pointer; }
+.inv-card { position: relative; background: #fff; border-radius: 8px; margin: 10px; padding: 12px; cursor: pointer; }
+.list-wrap.with-bar { padding-bottom: 64px; }
 .inv-card.dup { border-left: 3px solid #ee0a24; }
+.inv-card.selected { outline: 2px solid var(--van-primary-color, #1989fa); }
+.check-icon { position: absolute; top: 12px; right: 12px; font-size: 20px; color: #c8c9cc; }
+.check-icon.active { color: var(--van-primary-color, #1989fa); }
+.manage-entry { color: var(--van-primary-color, #1989fa); font-size: 14px; }
 .row1 { display: flex; justify-content: space-between; font-weight: 600; }
 .amount { color: #ee0a24; }
 .row2 { color: #646566; font-size: 13px; margin: 6px 0; }
 .row3 { display: flex; align-items: center; gap: 8px; color: #969799; font-size: 12px; }
 .cal-footer { display: flex; gap: 12px; padding: 10px 16px; }
+.manage-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: #fff;
+  box-shadow: 0 -2px 12px rgba(100, 101, 102, 0.12);
+}
 </style>

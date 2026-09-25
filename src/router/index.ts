@@ -6,6 +6,7 @@ const router = createRouter({
   routes: [
     { path: '/login', component: () => import('@/views/Login.vue'), meta: { title: '登录' } },
     { path: '/register', component: () => import('@/views/Register.vue'), meta: { title: '注册' } },
+    { path: '/forgot', component: () => import('@/views/ForgotPwd.vue'), meta: { title: '找回密码' } },
     {
       path: '/',
       component: () => import('@/views/Home.vue'),
@@ -25,7 +26,8 @@ const router = createRouter({
 
 router.beforeEach((to) => {
   const auth = useAuthStore()
-  if (!auth.isLoggedIn && to.path !== '/login' && to.path !== '/register') {
+  const WHITE_LIST = ['/login', '/register', '/forgot']
+  if (!auth.isLoggedIn && !WHITE_LIST.includes(to.path)) {
     return '/login'
   }
   document.title = (to.meta.title as string) || '智能服务平台'

@@ -31,7 +31,12 @@ export const listInvoices = (params: {
 export const getInvoice = (id: number) =>
   request.get<any, { id: number; items: Record<string, string>[] } & InvoiceRow>(`/invoices/${id}`)
 
-export const deleteInvoices = (ids: number[]) => request.delete<any, { deleted: number }>('/invoices', { params: { ids } })
+export const deleteInvoices = (ids: number[]) =>
+  // FastAPI list[int] 接收重复键 ids=1&ids=2；axios v1 默认会序列化成 ids[]，必须显式指定
+  request.delete<any, { deleted: number }>('/invoices', {
+    params: { ids },
+    paramsSerializer: { indexes: null },
+  })
 
 export const createExport = (package_id?: number) => request.post<any, { export_id: number }>('/exports', { package_id })
 export const listExports = () =>

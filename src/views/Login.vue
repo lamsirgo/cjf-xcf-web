@@ -13,7 +13,10 @@
       </van-cell-group>
       <div class="submit-wrap">
         <van-button round block type="primary" native-type="submit" :loading="loading">登 录</van-button>
-        <router-link to="/register" class="link">没有账号？立即注册</router-link>
+        <div class="links">
+          <router-link to="/forgot" class="link">忘记密码？</router-link>
+          <router-link to="/register" class="link">没有账号？立即注册</router-link>
+        </div>
       </div>
     </van-form>
   </div>
@@ -21,12 +24,11 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { showToast } from 'vant'
+import { useRoute, useRouter } from 'vue-router'
 import { login } from '@/api/auth'
 import { useAuthStore } from '@/stores/auth'
 
-const mobile = ref('')
+const mobile = ref((useRoute().query.mobile as string) || '')
 const password = ref('')
 const loading = ref(false)
 const router = useRouter()
@@ -52,5 +54,6 @@ async function onSubmit() {
 .logo h2 { margin: 0 0 8px; color: #1989fa; }
 .logo p { margin: 0; color: #969799; font-size: 13px; }
 .submit-wrap { margin: 24px 16px; text-align: center; }
-.link { display: inline-block; margin-top: 16px; color: #1989fa; font-size: 14px; }
+.links { display: flex; justify-content: space-between; margin-top: 16px; }
+.link { color: #1989fa; font-size: 14px; }
 </style>

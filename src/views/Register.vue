@@ -5,8 +5,8 @@
       <van-cell-group inset style="margin-top: 16px">
         <van-field v-model="mobile" label="手机号" placeholder="请输入手机号"
           :rules="[{ pattern: /^1\d{10}$/, message: '手机号格式错误' }]" />
-        <van-field v-model="password" type="password" label="密码" placeholder="6-32位密码"
-          :rules="[{ validator: (v: string) => v.length >= 6, message: '密码至少6位' }]" />
+        <van-field v-model="password" type="password" label="密码" placeholder="8-32位，含字母和数字"
+          :rules="[{ pattern: /^(?=.*[A-Za-z])(?=.*\d)\S{8,32}$/, message: '密码需8-32位，且同时含字母和数字' }]" />
         <van-field v-model="captchaCode" center label="验证码" placeholder="输入右侧验证码">
           <template #button>
             <img :src="captchaImg" alt="验证码" class="captcha" @click="loadCaptcha" />

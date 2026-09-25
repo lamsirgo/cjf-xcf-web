@@ -5,7 +5,16 @@ export const useAuthStore = defineStore('auth', {
   state: () => ({
     accessToken: localStorage.getItem('access_token') || '',
     refreshToken: localStorage.getItem('refresh_token') || '',
-    user: null as { id: number; mobile: string; nickname: string; email: string | null; quota_balance: number } | null,
+    user: null as
+      | {
+          id: number
+          mobile: string
+          nickname: string
+          email: string | null
+          quota_balance: number
+          quota_frozen: number
+        }
+      | null,
   }),
   getters: {
     isLoggedIn: (s) => !!s.accessToken,

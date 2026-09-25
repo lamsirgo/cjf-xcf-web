@@ -6,6 +6,7 @@ export interface PackageItem {
   total_files: number
   success_files: number
   failed_files: number
+  duplicate_files?: number
   done_files: number | null
   status: number
   status_text: string
@@ -16,11 +17,23 @@ export interface PackageItem {
   created_at: string
 }
 
+/** 幂等 key 生成：crypto.randomUUID 在非安全上下文（http 内网 IP）下可能不存在，做兜底 */
+function uuid(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return 'xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0
+    const v = c === 'x' ? r : (r & 0x3) | 0x8
+    return v.toString(16)
+  })
+}
+
 export const uploadPackages = (files: File[]) => {
   const form = new FormData()
   files.forEach((f) => form.append('files', f))
   // 幂等 key：断网重试同一批文件时不会重复建包
-  const key = crypto.randomUUID()
+  const key = uuid()
   return request.post<any, { package_id: number; total_files: number }>('/packages/upload', form, {
     timeout: 300000,
     headers: { 'Idempotency-Key': key },
