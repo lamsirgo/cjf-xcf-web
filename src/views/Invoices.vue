@@ -23,7 +23,14 @@
     </div>
 
     <div class="list-wrap">
-      <van-list v-model:loading="loading" :finished="finished" finished-text="没有更多了" @load="onLoad">
+      <van-list
+        v-model:loading="loading"
+        v-model:error="loadError"
+        :finished="finished"
+        finished-text="没有更多了"
+        error-text="加载失败，点击重试"
+        @load="onLoad"
+      >
         <div v-for="inv in list" :key="inv.id" class="inv-card" :class="{ dup: inv.duplicate }" @click="$router.push(`/app/invoice/${inv.id}`)">
           <div class="row1">
             <span class="no">{{ inv.invoice_num || '（无号码）' }}</span>
@@ -82,8 +89,11 @@ const endDate = ref<Date | null>(null)
 
 const list = ref<InvoiceRow[]>([])
 const loading = ref(false)
+const loadError = ref(false)
 const finished = ref(false)
 const page = ref(1)
+// 防止搜索触发与 van-list 自动加载并发导致重复/翻页错位
+let reqSeq = 0
 
 const hasDateFilter = computed(() => !!(startDate.value && endDate.value))
 
@@ -155,29 +165,42 @@ function clearDateFilter() {
 }
 
 async function load() {
-  const data = await listInvoices({
-    page: page.value,
-    page_size: 20,
-    keywords: keywords.value,
-    result: result.value,
-    date_start: startDate.value ? fmtDay(startDate.value) : '',
-    date_end: endDate.value ? fmtDay(endDate.value) : '',
-  })
+  const seq = ++reqSeq
   const currentPage = page.value
-  if (currentPage === 1) list.value = data.list
-  else list.value.push(...data.list)
-  finished.value = list.value.length >= data.total
-  loading.value = false
+  try {
+    const data = await listInvoices({
+      page: currentPage,
+      page_size: 20,
+      keywords: keywords.value,
+      result: result.value,
+      date_start: startDate.value ? fmtDay(startDate.value) : '',
+      date_end: endDate.value ? fmtDay(endDate.value) : '',
+    })
+    // 期间又触发了新的搜索/翻页请求，丢弃过期响应
+    if (seq !== reqSeq) return
+    if (currentPage === 1) list.value = data.list
+    else list.value.push(...data.list)
+    finished.value = list.value.length >= data.total
+    page.value++
+    loadError.value = false
+  } catch {
+    if (seq !== reqSeq) return
+    loadError.value = true
+  } finally {
+    if (seq === reqSeq) loading.value = false
+  }
 }
 
 function onLoad() {
-  load().then(() => page.value++)
+  load()
 }
 
 function onSearch() {
   page.value = 1
   finished.value = false
+  loadError.value = false
   list.value = []
+  loading.value = true
   load()
 }
 </script>

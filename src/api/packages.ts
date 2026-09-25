@@ -37,4 +37,11 @@ export const listPackageFiles = (id: number) =>
     `/packages/${id}/files`,
   )
 
-export const sseUrl = (id: number, token: string) => `/api/v1/packages/${id}/progress?token=${encodeURIComponent(token)}`
+export const fetchProgressTicket = (id: number) =>
+  request.get<any, { ticket: string; expires_in: number }>(`/packages/${id}/progress-ticket`)
+
+/** 先经 Authorization 头换取 15 分钟短时票据，再拼 SSE 地址，避免 JWT 出现在 URL 中 */
+export const sseUrl = async (id: number) => {
+  const { ticket } = await fetchProgressTicket(id)
+  return `/api/v1/packages/${id}/progress?ticket=${encodeURIComponent(ticket)}`
+}

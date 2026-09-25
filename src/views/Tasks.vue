@@ -140,11 +140,16 @@ async function onRetry(p: PackageItem) {
   refreshingLoad()
 }
 
-function listen(packages: PackageItem[]) {
+async function listen(packages: PackageItem[]) {
   es?.close()
   const active = packages.find((p) => p.status === 0 || p.status === 1)
   if (!active) return
-  es = new EventSource(sseUrl(active.id, auth.accessToken))
+  try {
+    const url = await sseUrl(active.id)
+    es = new EventSource(url)
+  } catch {
+    return // 换票据失败（如未登录），静默等待下次激活刷新
+  }
   es.onmessage = (ev) => {
     const obj = JSON.parse(ev.data)
     const idx = list.value.findIndex((x) => x.id === obj.package_id)
