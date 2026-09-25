@@ -17,7 +17,13 @@
           <van-skeleton title :row="2" animated />
         </div>
       </template>
+      <!-- 空状态：首屏加载完成且无数据（van-list 的“没有更多了”此时无意义） -->
+      <van-empty
+        v-if="!initialLoading && finished && list.length === 0"
+        description="暂无任务，去上传发票试试吧"
+      />
       <van-list
+        v-else
         v-model:loading="loading"
         v-model:error="loadError"
         :finished="finished"
@@ -314,7 +320,7 @@ onDeactivated(() => {
   display: flex;
   gap: 8px;
   padding: 8px 12px;
-  background: #fff;
+  background: var(--van-background-2, #fff);
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
 }
@@ -322,8 +328,8 @@ onDeactivated(() => {
   flex-shrink: 0;
   padding: 4px 12px;
   border-radius: 999px;
-  background: #f2f3f5;
-  color: #646566;
+  background: var(--van-background-3, #f2f3f5);
+  color: var(--van-text-color-2, #646566);
   font-size: 12px;
 }
 .chip.active { background: #ecf5ff; color: #1989fa; font-weight: 500; }
@@ -335,14 +341,14 @@ onDeactivated(() => {
   padding-bottom: 60px;
   box-sizing: border-box;
 }
-.pkg-card { background: #fff; border-radius: 8px; margin: 10px; padding: 12px; }
+.pkg-card { background: var(--van-background-2, #fff); border-radius: 8px; margin: 10px; padding: 12px; }
 .pkg-name { display: flex; justify-content: space-between; align-items: center; }
 .fname { font-weight: 600; word-break: break-all; }
-.pkg-sub { color: #969799; font-size: 12px; margin: 6px 0; }
+.pkg-sub { color: var(--van-text-color-3, #969799); font-size: 12px; margin: 6px 0; }
 .pkg-detail { color: #1989fa; font-size: 11px; margin-top: 2px; }
 .skeleton-card { padding: 16px 12px; }
 .pkg-actions { margin-top: 8px; text-align: right; }
-.pkg-files { border-top: 1px dashed #ebedf0; margin-top: 8px; padding-top: 8px; }
+.pkg-files { border-top: 1px dashed var(--van-border-color, #ebedf0); margin-top: 8px; padding-top: 8px; }
 .file-row { font-size: 12px; padding: 4px 0; }
 .f-name { margin-right: 8px; }
 .f-err { color: #ee0a24; margin-top: 2px; word-break: break-all; }

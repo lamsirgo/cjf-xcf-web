@@ -101,13 +101,13 @@ onMounted(async () => {
 <style scoped>
 .page {
   min-height: 100vh;
-  background: #f6f7f9;
+  background: var(--van-background, #f6f7f9);
 }
 .upload-card {
   margin: 12px;
-  border: 1px dashed #dcdee0;
+  border: 1px dashed var(--van-border-color, #dcdee0);
   border-radius: 12px;
-  background: #fff;
+  background: var(--van-background-2, #fff);
   overflow: hidden;
 }
 /* van-uploader 默认为 inline-block，会使上传卡收缩，改为整行宽度并居中 */
@@ -129,8 +129,8 @@ onMounted(async () => {
   gap: 8px;
 }
 .u-plus { font-size: 26px; color: #c8c9cc; }
-.u-title { font-size: 15px; font-weight: 500; color: #323233; }
-.u-cap { font-size: 12px; color: #969799; text-align: center; }
+.u-title { font-size: 15px; font-weight: 500; color: var(--van-text-color, #323233); }
+.u-cap { font-size: 12px; color: var(--van-text-color-3, #969799); text-align: center; }
 
 .menu { margin-top: 0; }
 .badge {

@@ -27,7 +27,10 @@
     </div>
 
     <div class="list-wrap" :class="{ 'with-bar': manageMode }">
+      <!-- 空状态：加载完成且无数据（区分“无发票”与“筛选无结果”） -->
+      <van-empty v-if="finished && list.length === 0" :description="emptyText" />
       <van-list
+        v-else
         v-model:loading="loading"
         v-model:error="loadError"
         :finished="finished"
@@ -130,6 +133,10 @@ const page = ref(1)
 let reqSeq = 0
 
 const hasDateFilter = computed(() => !!(startDate.value && endDate.value))
+
+const emptyText = computed(() =>
+  keywords.value || result.value || hasDateFilter.value ? '没有符合条件的发票' : '暂无发票，去上传解析吧'
+)
 
 /** 紧凑区间文案：同年 MM-DD~MM-DD，跨年显示完整年份 */
 const rangeText = computed(() => {
@@ -302,7 +309,7 @@ async function onBatchDelete() {
 }
 .filter-bar {
   flex-shrink: 0;
-  background: #fff;
+  background: var(--van-background-2, #fff);
 }
 .filter-row {
   display: flex;
@@ -375,7 +382,7 @@ async function onBatchDelete() {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
-.inv-card { position: relative; background: #fff; border-radius: 8px; margin: 10px; padding: 12px; cursor: pointer; }
+.inv-card { position: relative; background: var(--van-background-2, #fff); border-radius: 8px; margin: 10px; padding: 12px; cursor: pointer; }
 .list-wrap.with-bar { padding-bottom: 64px; }
 .inv-card.dup { border-left: 3px solid #ee0a24; }
 .inv-card.selected { outline: 2px solid var(--van-primary-color, #1989fa); }
@@ -384,8 +391,8 @@ async function onBatchDelete() {
 .manage-entry { color: var(--van-primary-color, #1989fa); font-size: 14px; }
 .row1 { display: flex; justify-content: space-between; font-weight: 600; }
 .amount { color: #ee0a24; }
-.row2 { color: #646566; font-size: 13px; margin: 6px 0; }
-.row3 { display: flex; align-items: center; gap: 8px; color: #969799; font-size: 12px; }
+.row2 { color: var(--van-text-color-2, #646566); font-size: 13px; margin: 6px 0; }
+.row3 { display: flex; align-items: center; gap: 8px; color: var(--van-text-color-3, #969799); font-size: 12px; }
 .cal-footer { display: flex; gap: 12px; padding: 10px 16px; }
 .manage-bar {
   position: fixed;
@@ -398,7 +405,7 @@ async function onBatchDelete() {
   align-items: center;
   gap: 12px;
   padding: 8px 16px;
-  background: #fff;
+  background: var(--van-background-2, #fff);
   box-shadow: 0 -2px 12px rgba(100, 101, 102, 0.12);
 }
 </style>

@@ -285,7 +285,7 @@ onUnmounted(() => {
 .page {
   min-height: 100vh;
   padding-bottom: 72px;
-  background: #f6f7f9;
+  background: var(--van-background, #f6f7f9);
 }
 .user-card {
   display: flex;
@@ -293,34 +293,34 @@ onUnmounted(() => {
   gap: 12px;
   margin: 16px 16px 0;
   padding: 16px;
-  background: #fff;
+  background: var(--van-background-2, #fff);
   border-radius: 12px;
 }
 .avatar {
   width: 48px;
   height: 48px;
   border-radius: 999px;
-  background: #f2f3f5;
-  color: #969799;
+  background: var(--van-background-3, #f2f3f5);
+  color: var(--van-text-color-3, #969799);
   font-size: 24px;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 .user-meta { display: flex; flex-direction: column; gap: 6px; }
-.user-name { font-size: 16px; font-weight: 600; color: #323233; }
+.user-name { font-size: 16px; font-weight: 600; color: var(--van-text-color, #323233); }
 
 .stat-card {
   display: flex;
   margin: 12px 16px 0;
-  background: #fff;
+  background: var(--van-background-2, #fff);
   border-radius: 12px;
   padding: 16px 0;
 }
 .stat { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; }
-.stat + .stat { border-left: 1px solid #f2f3f5; }
-.stat-num { font-size: 20px; font-weight: 700; color: #323233; }
-.stat-label { font-size: 12px; color: #969799; }
+.stat + .stat { border-left: 1px solid var(--van-border-color, #f2f3f5); }
+.stat-num { font-size: 20px; font-weight: 700; color: var(--van-text-color, #323233); }
+.stat-label { font-size: 12px; color: var(--van-text-color-3, #969799); }
 
 .quota-alert {
   margin: 8px 16px 0;
@@ -344,10 +344,10 @@ html.van-theme-dark .quota-alert {
 .email-tip { padding: 0 16px; font-size: 12px; color: var(--van-text-color-2, #969799); line-height: 1.5; }
 
 .export-head { display: flex; justify-content: space-between; align-items: center; padding: 16px; font-weight: 600; }
-.export-row { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid #f0f0f0; font-size: 13px; }
+.export-row { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--van-border-color, #f0f0f0); font-size: 13px; }
 .dl { margin-left: auto; color: #1989fa; }
 
-.about { padding: 8px 16px 20px; text-align: center; color: #969799; font-size: 12px; }
+.about { padding: 8px 16px 20px; text-align: center; color: var(--van-text-color-3, #969799); font-size: 12px; }
 .about p { margin: 4px 0; }
-.about-name { font-size: 15px; font-weight: 600; color: #323233; }
+.about-name { font-size: 15px; font-weight: 600; color: var(--van-text-color, #323233); }
 </style>

@@ -104,10 +104,10 @@ onMounted(async () => {
 .center { display: flex; justify-content: center; padding-top: 120px; }
 .amount { color: #ee0a24; }
 .section { margin: 16px 16px 0; font-weight: 600; }
-.item-card { background: #fff; border-radius: 8px; margin: 10px 16px; padding: 12px; }
+.item-card { background: var(--van-background-2, #fff); border-radius: 8px; margin: 10px 16px; padding: 12px; }
 .i-name { font-weight: 500; margin-bottom: 6px; }
-.i-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; color: #646566; font-size: 13px; }
+.i-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; color: var(--van-text-color-2, #646566); font-size: 13px; }
 .fail-reason { margin: 12px 16px 0; color: #ee0a24; font-size: 13px; }
 .del-wrap { margin: 20px 16px; }
-.error-block { display: flex; flex-direction: column; align-items: center; gap: 12px; padding-top: 120px; color: #969799; }
+.error-block { display: flex; flex-direction: column; align-items: center; gap: 12px; padding-top: 120px; color: var(--van-text-color-3, #969799); }
 </style>
