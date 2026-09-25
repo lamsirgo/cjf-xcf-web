@@ -17,7 +17,14 @@
           <van-skeleton title :row="2" animated />
         </div>
       </template>
-      <van-list v-model:loading="loading" :finished="finished" finished-text="没有更多了" @load="onLoad">
+      <van-list
+        v-model:loading="loading"
+        v-model:error="loadError"
+        :finished="finished"
+        finished-text="没有更多了"
+        error-text="加载失败，点击重试"
+        @load="onLoad"
+      >
         <div v-for="p in list" :key="p.id" class="pkg-card">
           <div class="pkg-head" @click="toggle(p)">
             <div class="pkg-name">
@@ -60,6 +67,7 @@ import { useAuthStore } from '@/stores/auth'
 const auth = useAuthStore()
 const list = ref<PackageItem[]>([])
 const loading = ref(false)
+const loadError = ref(false)
 const finished = ref(false)
 const refreshing = ref(false)
 const initialLoading = ref(true)
@@ -79,21 +87,32 @@ async function load() {
 }
 
 async function onLoad() {
-  await load()
-  page.value++
-  loading.value = false
-  initialLoading.value = false
-  if (finished.value) return
+  try {
+    await load()
+    page.value++
+    loadError.value = false
+  } catch {
+    // 进入 van-list 错误态，点击“加载失败，点击重试”会重新触发 onLoad
+    loadError.value = true
+  } finally {
+    loading.value = false
+    initialLoading.value = false
+  }
 }
 
 async function onRefresh() {
   page.value = 1
   finished.value = false
   loading.value = true
-  await load()
-  loading.value = false
-  refreshing.value = false
-  initialLoading.value = false
+  try {
+    await load()
+  } catch {
+    showToast('刷新失败，请稍后再试')
+  } finally {
+    loading.value = false
+    refreshing.value = false
+    initialLoading.value = false
+  }
 }
 
 const refreshingLoad = onRefresh
@@ -107,9 +126,12 @@ async function toggle(p: PackageItem) {
     expanded.value = null
     return
   }
-  const data = await listPackageFiles(p.id)
-  files.value = data.list
   expanded.value = p.id
+  files.value = []
+  const data = await listPackageFiles(p.id)
+  // 防止快速连续展开不同包时，旧请求返回覆盖当前展开包的文件列表
+  if (expanded.value !== p.id) return
+  files.value = data.list
 }
 
 async function onRetry(p: PackageItem) {

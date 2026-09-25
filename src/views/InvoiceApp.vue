@@ -3,7 +3,13 @@
     <van-nav-bar title="发票识别" left-arrow @click-left="router.back()" />
 
     <div class="upload-card">
-      <van-uploader :after-read="onAfterRead" :max-count="20" :deletable="false" accept=".zip,.rar,.pdf,.jpg,.jpeg,.png">
+      <van-uploader
+        :after-read="onAfterRead"
+        :max-count="20"
+        :deletable="false"
+        :disabled="uploading"
+        accept=".zip,.rar,.pdf,.jpg,.jpeg,.png"
+      >
         <div class="upload-inner">
           <van-icon name="plus" class="u-plus" />
           <span class="u-title">选择压缩包 / 发票文件</span>
@@ -34,20 +40,56 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { showToast } from 'vant'
+import { showLoadingToast, showToast } from 'vant'
 import { listPackages, uploadPackages } from '@/api/packages'
 
 const router = useRouter()
 const activeCount = ref(0)
+const uploading = ref(false)
+
+const ALLOWED_EXT = ['zip', 'rar', 'pdf', 'jpg', 'jpeg', 'png']
+const MAX_FILE_SIZE = 20 * 1024 * 1024
+const MAX_TOTAL_SIZE = 100 * 1024 * 1024
 
 async function onAfterRead(items: unknown) {
+  if (uploading.value) return
   const arr = Array.isArray(items) ? items : [items]
-  const fs = arr.map((i) => (i as { file: File }).file)
+  const fs = arr.map((i) => (i as { file: File }).file).filter(Boolean)
+  if (fs.length === 0) return
+
+  // 客户端预检（accept 可被绕过，这里按扩展名/大小再校验一次，服务端仍为最终防线）
+  const hasArchive = fs.some((f) => /\.(zip|rar)$/i.test(f.name))
+  if (hasArchive && fs.length > 1) {
+    showToast('压缩包请单独上传')
+    return
+  }
+  for (const f of fs) {
+    const ext = f.name.split('.').pop()?.toLowerCase() ?? ''
+    if (!ALLOWED_EXT.includes(ext)) {
+      showToast(`不支持的文件类型：${f.name}`)
+      return
+    }
+    if (!hasArchive && f.size > MAX_FILE_SIZE) {
+      showToast(`单个文件不能超过 20MB：${f.name}`)
+      return
+    }
+  }
+  const total = fs.reduce((sum, f) => sum + f.size, 0)
+  if (total > MAX_TOTAL_SIZE) {
+    showToast('文件总大小不能超过 100MB')
+    return
+  }
+
+  uploading.value = true
+  const toast = showLoadingToast({ message: '上传中...', forbidClick: true, duration: 0 })
   try {
     const res = await uploadPackages(fs)
     showToast(`已提交 ${res.total_files} 个文件`)
     router.push('/tasks')
-  } catch { /* 拦截器已提示 */ }
+  } catch { /* 拦截器已提示 */ } finally {
+    toast.close()
+    uploading.value = false
+  }
 }
 
 onMounted(async () => {
