@@ -1,0 +1,52 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
+  background: var(--van-background);
+  color: var(--van-text-color);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 深色模式适配：覆盖自定义卡片背景 */
+html.van-theme-dark .page,
+html.van-theme-dark .task-scroll,
+html.van-theme-dark .app-chips {
+  background: #1a1a1a !important;
+}
+html.van-theme-dark .tile,
+html.van-theme-dark .quota-card,
+html.van-theme-dark .task-card,
+html.van-theme-dark .pkg-card,
+html.van-theme-dark .empty,
+html.van-theme-dark .user-card,
+html.van-theme-dark .stat-card,
+html.van-theme-dark .top-bar .van-nav-bar {
+  background: #2a2a2a !important;
+  border-color: #3a3a3a !important;
+}
+html.van-theme-dark .hi,
+html.van-theme-dark .task-name,
+html.van-theme-dark .fname,
+html.van-theme-dark .q-num,
+html.van-theme-dark .tname,
+html.van-theme-dark .user-name,
+html.van-theme-dark .stat-num {
+  color: #f5f5f5 !important;
+}
+html.van-theme-dark .mobile,
+html.van-theme-dark .sec-link,
+html.van-theme-dark .task-sub,
+html.van-theme-dark .pkg-sub,
+html.van-theme-dark .q-label,
+html.van-theme-dark .q-foot,
+html.van-theme-dark .empty,
+html.van-theme-dark .f-name,
+html.van-theme-dark .stat-label {
+  color: #a0a0a0 !important;
+}
+html.van-theme-dark .tic { background: #3a3a3a !important; }
+html.van-theme-dark .chip { background: #3a3a3a !important; color: #c0c0c0 !important; }
+html.van-theme-dark .chip.active { background: #1a3a5c !important; color: #409eff !important; }
+html.van-theme-dark .tile.is-selected .tic { background: #1a3a5c !important; color: #409eff !important; }
+html.van-theme-dark .tile.is-selected .tname { color: #409eff !important; }
+html.van-theme-dark .pkg-files { border-top-color: #3a3a3a !important; }

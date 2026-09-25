@@ -1,0 +1,31 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+dist-ssr/
+*.local
+
+# 日志
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# 环境变量本地覆盖（VITE_ 前缀变量本身非敏感，覆盖文件不提交）
+.env.local
+.env.*.local
+
+# 本项目统一使用 pnpm
+package-lock.json
+yarn.lock
+
+# 编辑器与系统文件
+.DS_Store
+.idea
+.vscode/*
+!.vscode/extensions.json
+*.suo
+*.sw?
