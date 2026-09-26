@@ -45,10 +45,19 @@ export const listPackages = (page = 1) =>
 
 export const retryPackage = (id: number) => request.post(`/packages/${id}/retry`)
 
+export interface PackageFileItem {
+  id: number
+  orig_path: string
+  ext: string
+  size: number
+  status: number
+  status_text: string
+  fail_reason: string
+  fail_type: number
+}
+
 export const listPackageFiles = (id: number) =>
-  request.get<any, { list: { id: number; orig_path: string; status_text: string; fail_reason: string }[] }>(
-    `/packages/${id}/files`,
-  )
+  request.get<any, { list: PackageFileItem[] }>(`/packages/${id}/files`)
 
 export const fetchProgressTicket = (id: number) =>
   request.get<any, { ticket: string; expires_in: number }>(`/packages/${id}/progress-ticket`)

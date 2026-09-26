@@ -2,6 +2,7 @@
   <div class="page">
     <van-nav-bar title="发票库" left-arrow @click-left="$router.back()">
       <template #right>
+        <span class="nav-action" @click="openExport">导出</span>
         <span class="manage-entry" @click="toggleManage">{{ manageMode ? '完成' : '管理' }}</span>
       </template>
     </van-nav-bar>
@@ -97,6 +98,34 @@
         </div>
       </template>
     </van-calendar>
+
+    <!-- 导出：按当前筛选条件 + 字段选择 -->
+    <van-popup v-model:show="showExport" round position="bottom">
+      <div class="export-pop">
+        <div class="export-title">导出发票</div>
+        <p class="export-scope">导出范围：{{ exportScopeText }}</p>
+        <div class="export-sub">选择导出字段</div>
+        <van-checkbox-group v-model="exportFields">
+          <van-cell-group :border="false">
+            <van-cell
+              v-for="f in EXPORT_FIELD_OPTIONS"
+              :key="f.key"
+              :title="f.label"
+              clickable
+              @click="toggleField(f.key)"
+            >
+              <template #right-icon>
+                <van-checkbox :name="f.key" @click.stop />
+              </template>
+            </van-cell>
+          </van-cell-group>
+        </van-checkbox-group>
+        <div class="export-foot van-safe-area-bottom">
+          <van-button block @click="showExport = false">取消</van-button>
+          <van-button block type="primary" :loading="exporting" @click="onConfirmExport">创建导出</van-button>
+        </div>
+      </div>
+    </van-popup>
   </div>
 </template>
 
@@ -104,7 +133,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { showConfirmDialog, showToast } from 'vant'
-import { deleteInvoices, listInvoices, type InvoiceRow } from '@/api/invoices'
+import { deleteInvoices, listInvoices, createExport, type InvoiceRow } from '@/api/invoices'
 
 const router = useRouter()
 
@@ -249,6 +278,67 @@ function onSearch() {
   load()
 }
 
+// ---------- 导出（按当前筛选 + 字段选择） ----------
+const showExport = ref(false)
+const exporting = ref(false)
+const EXPORT_FIELD_OPTIONS = [
+  { key: 'invoice_code', label: '发票代码' },
+  { key: 'invoice_num', label: '发票号码' },
+  { key: 'invoice_type', label: '发票类型' },
+  { key: 'invoice_date', label: '开票日期' },
+  { key: 'purchaser_name', label: '购买方' },
+  { key: 'purchaser_register_num', label: '购买方税号' },
+  { key: 'seller_name', label: '销售方' },
+  { key: 'seller_register_num', label: '销售方税号' },
+  { key: 'total_amount', label: '价税合计' },
+  { key: 'status', label: '解析状态' },
+  { key: 'fail_reason', label: '失败原因' },
+  { key: 'items', label: '货物明细' },
+]
+const exportFields = ref<string[]>(EXPORT_FIELD_OPTIONS.map((f) => f.key))
+
+const exportScopeText = computed(() => {
+  const parts: string[] = []
+  if (keywords.value) parts.push(`关键词“${keywords.value}”`)
+  if (result.value) parts.push(resultOptions.find((o) => o.value === result.value)?.text || '')
+  if (hasDateFilter.value) parts.push(`开票日期 ${fmtDay(startDate.value!)}~${fmtDay(endDate.value!)}`)
+  return parts.length ? parts.join('，') : '全部发票'
+})
+
+function openExport() {
+  exportFields.value = EXPORT_FIELD_OPTIONS.map((f) => f.key)
+  showExport.value = true
+}
+
+function toggleField(key: string) {
+  const i = exportFields.value.indexOf(key)
+  if (i >= 0) exportFields.value.splice(i, 1)
+  else exportFields.value.push(key)
+}
+
+async function onConfirmExport() {
+  if (!exportFields.value.length) {
+    showToast('请至少选择一个导出字段')
+    return
+  }
+  exporting.value = true
+  try {
+    await createExport({
+      keywords: keywords.value,
+      date_start: startDate.value ? fmtDay(startDate.value) : '',
+      date_end: endDate.value ? fmtDay(endDate.value) : '',
+      result: result.value,
+      fields: exportFields.value,
+    })
+    showToast('导出任务已创建，完成后可在消息中下载')
+    showExport.value = false
+  } catch {
+    /* 拦截器已提示 */
+  } finally {
+    exporting.value = false
+  }
+}
+
 // ---------- 批量管理（软删除）----------
 const manageMode = ref(false)
 const selectedIds = ref<Set<number>>(new Set())
@@ -389,6 +479,12 @@ async function onBatchDelete() {
 .check-icon { position: absolute; top: 12px; right: 12px; font-size: 20px; color: #c8c9cc; }
 .check-icon.active { color: var(--van-primary-color, #1989fa); }
 .manage-entry { color: var(--van-primary-color, #1989fa); font-size: 14px; }
+.nav-action { color: var(--van-primary-color, #1989fa); font-size: 14px; margin-right: 14px; }
+.export-pop { padding-bottom: 8px; }
+.export-title { padding: 16px 16px 4px; font-weight: 600; text-align: center; }
+.export-scope { margin: 0 16px 8px; font-size: 12px; color: var(--van-text-color-3, #969799); text-align: center; }
+.export-sub { margin: 4px 16px 8px; font-size: 13px; color: var(--van-text-color-2, #646566); }
+.export-foot { display: flex; gap: 12px; padding: 10px 16px; }
 .row1 { display: flex; justify-content: space-between; font-weight: 600; }
 .amount { color: #ee0a24; }
 .row2 { color: var(--van-text-color-2, #646566); font-size: 13px; margin: 6px 0; }

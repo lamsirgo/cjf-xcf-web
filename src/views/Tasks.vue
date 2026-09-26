@@ -53,6 +53,7 @@
                 {{ f.status_text }}
               </van-tag>
               <div v-if="f.fail_reason" class="f-err">{{ f.fail_reason }}</div>
+              <div v-if="f.fail_type" class="f-guide">{{ FAIL_GUIDE[f.fail_type] }}</div>
             </div>
           </div>
           <div v-if="p.status === 3 || p.status === 4" class="pkg-actions">
@@ -75,7 +76,7 @@
 <script setup lang="ts">
 import { onActivated, onDeactivated, ref } from 'vue'
 import { showToast } from 'vant'
-import { listPackages, listPackageFiles, retryPackage, sseUrl, type PackageItem } from '@/api/packages'
+import { listPackages, listPackageFiles, retryPackage, sseUrl, type PackageFileItem, type PackageItem } from '@/api/packages'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
@@ -87,13 +88,21 @@ const refreshing = ref(false)
 const initialLoading = ref(true)
 const page = ref(1)
 const expanded = ref<number | null>(null)
-const files = ref<{ id: number; orig_path: string; status_text: string; fail_reason: string }[]>([])
+const files = ref<PackageFileItem[]>([])
 // 当前仅发票识别一个应用，全部/发票识别数据相同
 const appFilter = ref<'all' | 'invoice'>('all')
 const retryingId = ref<number | null>(null)
 
 // 防止 van-list 自动加载与手动刷新/翻页并发，过期响应直接丢弃
 let reqSeq = 0
+
+// 失败分类重试指引（与后端 FailType 对应）
+const FAIL_GUIDE: Record<number, string> = {
+  1: '未识别为有效发票，请确认文件内容后重新上传',
+  2: '图片不清晰，请提供更清晰的扫描件/照片后重新上传',
+  3: '文件已加密，请先解除密码保护后重新上传',
+  4: '服务暂时异常或文件损坏，可直接重试；多次失败请联系管理员',
+}
 async function load() {
   const seq = ++reqSeq
   const currentPage = page.value
@@ -352,4 +361,5 @@ onDeactivated(() => {
 .file-row { font-size: 12px; padding: 4px 0; }
 .f-name { margin-right: 8px; }
 .f-err { color: #ee0a24; margin-top: 2px; word-break: break-all; }
+.f-guide { color: var(--van-text-color-3, #969799); margin-top: 2px; }
 </style>

@@ -75,14 +75,20 @@
     <van-popup v-model:show="showExport" round position="bottom" style="min-height: 40vh">
       <div class="export-head">
         <span>导出记录</span>
-        <van-button size="small" type="primary" @click="onExport">导出全部发票</van-button>
+        <van-button size="small" type="primary" @click="goFilteredExport">导出发票</van-button>
       </div>
+      <van-empty v-if="!exports.length" description="暂无导出记录" />
       <div v-for="e in exports" :key="e.id" class="export-row">
-        <span>{{ e.created_at?.slice(0, 19).replace('T', ' ') }}</span>
+        <div class="export-info">
+          <span>{{ e.created_at?.slice(0, 19).replace('T', ' ') }}</span>
+          <span v-if="exportScope(e)" class="export-scope">{{ exportScope(e) }}</span>
+          <span v-if="e.status === 2 && e.error_msg" class="export-err">{{ e.error_msg }}</span>
+        </div>
         <van-tag :type="e.status === 1 ? 'success' : e.status === 2 ? 'danger' : 'primary'">
           {{ ['处理中', '已完成', '失败'][e.status] }}
         </van-tag>
-        <a v-if="e.status === 1" :href="e.download_url" class="dl">下载</a>
+        <!-- 下载统一走重签拿新链接：签名 24h 过期，避免旧链接 403 -->
+        <a v-if="e.status === 1" class="dl" @click="onDownload(e)">下载</a>
       </div>
     </van-popup>
 
@@ -101,7 +107,7 @@ import { computed, inject, onActivated, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { showSuccessToast, showToast } from 'vant'
 import { bindEmail, changePassword, sendBindEmailCode, updateMe } from '@/api/auth'
-import { createExport, listExports, listInvoices } from '@/api/invoices'
+import { listExports, listInvoices, resignExport, type ExportRow } from '@/api/invoices'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
@@ -119,7 +125,7 @@ const oldPwd = ref('')
 const newPwd = ref('')
 const showExport = ref(false)
 const showAbout = ref(false)
-const exports = ref<any[]>([])
+const exports = ref<ExportRow[]>([])
 const totalInvoices = ref(0)
 
 // 账号与安全：昵称、邮箱
@@ -250,15 +256,37 @@ async function loadExports() {
   exports.value = (await listExports()).list
 }
 
+// 导出记录的范围摘要（关键词/日期/结果筛选）
+const RESULT_TEXT: Record<string, string> = { success: '仅成功', failed: '仅失败', duplicate: '仅重复' }
+function exportScope(e: ExportRow): string {
+  const f = e.filters
+  if (!f) return ''
+  const parts: string[] = []
+  if (f.keywords) parts.push(`关键词“${f.keywords}”`)
+  if (f.result) parts.push(RESULT_TEXT[f.result] || '')
+  if (f.date_start || f.date_end) parts.push(`${f.date_start || '…'}~${f.date_end || '…'}`)
+  return parts.join('，')
+}
+
+// 跳转发票库（导出按钮在那里，可按当前筛选+字段选择创建）
+function goFilteredExport() {
+  showExport.value = false
+  router.push('/app/invoice/list')
+}
+
+// 下载统一调重签接口拿新签名链接（旧链接 24h 过期）；文件已被清理时后端明确提示重新导出
+async function onDownload(e: ExportRow) {
+  try {
+    const { download_url } = await resignExport(e.id)
+    window.open(download_url, '_blank')
+  } catch {
+    /* 拦截器已提示 */
+  }
+}
+
 async function loadTotal() {
   const data = await listInvoices({ page: 1, page_size: 1 })
   totalInvoices.value = data.total
-}
-
-async function onExport() {
-  await createExport()
-  showToast('已创建导出任务，完成后可下载')
-  loadExports()
 }
 
 function onLogout() {
@@ -345,6 +373,9 @@ html.van-theme-dark .quota-alert {
 
 .export-head { display: flex; justify-content: space-between; align-items: center; padding: 16px; font-weight: 600; }
 .export-row { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--van-border-color, #f0f0f0); font-size: 13px; }
+.export-info { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.export-scope { font-size: 12px; color: var(--van-text-color-3, #969799); }
+.export-err { font-size: 12px; color: #ee0a24; word-break: break-all; }
 .dl { margin-left: auto; color: #1989fa; }
 
 .about { padding: 8px 16px 20px; text-align: center; color: var(--van-text-color-3, #969799); font-size: 12px; }

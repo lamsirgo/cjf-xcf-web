@@ -50,6 +50,8 @@ function forceLogout(): boolean {
 
 request.interceptors.response.use(
   (resp) => {
+    // 文件下载（blob）：直接返回 Blob，业务码判断不适用
+    if (resp.data instanceof Blob) return resp.data
     const { code, msg, data } = resp.data
     if (code !== 0) {
       showToast(msg || '操作失败')
@@ -59,7 +61,15 @@ request.interceptors.response.use(
   },
   async (error) => {
     const status = error.response?.status
-    const body = error.response?.data
+    let body = error.response?.data
+    // blob 请求的失败响应也是 Blob，需解出 JSON 错误体
+    if (body instanceof Blob) {
+      try {
+        body = JSON.parse(await body.text())
+      } catch {
+        body = undefined
+      }
+    }
     const config = error.config as (typeof error.config & { _retried?: boolean }) | undefined
 
     if (status === 401 && config) {
