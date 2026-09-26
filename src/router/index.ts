@@ -17,6 +17,7 @@ const router = createRouter({
         { path: 'profile', component: () => import('@/views/Profile.vue'), meta: { title: '我的' } },
       ],
     },
+    { path: '/notifications', component: () => import('@/views/Notifications.vue'), meta: { title: '消息通知' } },
     // 子应用：发票识别（独立页面栈，不显示平台底部导航）
     { path: '/app/invoice', component: () => import('@/views/InvoiceApp.vue'), meta: { title: '发票识别' } },
     { path: '/app/invoice/list', component: () => import('@/views/Invoices.vue'), meta: { title: '发票库' } },

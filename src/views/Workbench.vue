@@ -11,7 +11,9 @@
           class="top-icon"
           @click="toggleDark"
         />
-        <van-icon name="bell" class="top-icon" @click="showToast('暂无新消息')" />
+        <van-badge :content="unreadCount || ''" :dot="unreadCount === 0 ? false : unreadCount > 99" max="99">
+          <van-icon name="bell" class="top-icon" @click="router.push('/notifications')" />
+        </van-badge>
       </div>
     </div>
 
@@ -75,10 +77,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject, onActivated, ref } from 'vue'
+import { computed, inject, onActivated, onDeactivated, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { showToast } from 'vant'
 import { listApps, type AppItem } from '@/api/apps'
+import { listNotifications } from '@/api/notifications'
 import { listPackages, type PackageItem } from '@/api/packages'
 import { useAuthStore } from '@/stores/auth'
 
@@ -89,6 +92,8 @@ const { dark, toggleDark } = inject<{ dark: { value: boolean }; toggleDark: () =
 
 const apps = ref<AppItem[]>([])
 const recent = ref<PackageItem[]>([])
+const unreadCount = ref(0)
+let unreadTimer: ReturnType<typeof setInterval> | null = null
 
 const greeting = computed(() => {
   const h = new Date().getHours()
@@ -151,8 +156,21 @@ function saveCachedApps(data: AppItem[]) {
   } catch { /* storage full */ }
 }
 
+async function loadUnreadCount() {
+  try {
+    const data = await listNotifications()
+    unreadCount.value = data.list.filter((n) => !n.is_read).length
+  } catch {
+    /* 静默失败 */
+  }
+}
+
 onActivated(async () => {
   await auth.fetchMe().catch(() => {})
+  await loadUnreadCount()
+  if (unreadTimer === null) {
+    unreadTimer = setInterval(loadUnreadCount, 30_000)
+  }
 
   const cached = loadCachedApps()
   if (cached) apps.value = cached
@@ -167,6 +185,20 @@ onActivated(async () => {
     saveCachedApps(appData.list)
   }
   recent.value = pkgData?.list.slice(0, 2) ?? []
+})
+
+onDeactivated(() => {
+  if (unreadTimer !== null) {
+    clearInterval(unreadTimer)
+    unreadTimer = null
+  }
+})
+
+onUnmounted(() => {
+  if (unreadTimer !== null) {
+    clearInterval(unreadTimer)
+    unreadTimer = null
+  }
 })
 </script>
 
