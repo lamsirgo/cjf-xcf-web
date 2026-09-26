@@ -309,7 +309,7 @@ onMounted(async () => {
 
 <style scoped>
 .center { display: flex; justify-content: center; padding-top: 120px; }
-.amount { color: #ee0a24; }
+.amount { color: var(--van-danger-color); }
 .section { margin: 16px 16px 0; font-weight: 600; }
 .item-card { background: var(--van-background-2, #fff); border-radius: 8px; margin: 10px 16px; padding: 12px; }
 .i-name { font-weight: 500; margin-bottom: 6px; }
@@ -337,7 +337,7 @@ onMounted(async () => {
   border-radius: 8px;
 }
 .fail-head { display: flex; align-items: center; gap: 6px; color: #d48806; font-weight: 600; font-size: 14px; }
-.fail-reason { margin: 8px 0 0; color: #ee0a24; font-size: 12px; word-break: break-all; }
+.fail-reason { margin: 8px 0 0; color: var(--van-danger-color); font-size: 12px; word-break: break-all; }
 .fail-guide { margin: 8px 0 10px; color: var(--van-text-color-2, #646566); font-size: 12px; line-height: 1.5; }
 
 .btn-wrap { margin: 20px 16px; }
@@ -362,6 +362,6 @@ onMounted(async () => {
   font-size: 13px;
   color: var(--van-text-color-2, #646566);
 }
-.del-icon { color: #ee0a24; font-size: 16px; }
+.del-icon { color: var(--van-danger-color); font-size: 16px; }
 .edit-foot { display: flex; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--van-border-color, #ebedf0); }
 </style>

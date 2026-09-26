@@ -474,9 +474,9 @@ async function onBatchDelete() {
 }
 .inv-card { position: relative; background: var(--van-background-2, #fff); border-radius: 8px; margin: 10px; padding: 12px; cursor: pointer; }
 .list-wrap.with-bar { padding-bottom: 64px; }
-.inv-card.dup { border-left: 3px solid #ee0a24; }
+.inv-card.dup { border-left: 3px solid var(--van-danger-color); }
 .inv-card.selected { outline: 2px solid var(--van-primary-color, #1989fa); }
-.check-icon { position: absolute; top: 12px; right: 12px; font-size: 20px; color: #c8c9cc; }
+.check-icon { position: absolute; top: 12px; right: 12px; font-size: 20px; color: var(--van-gray-5); }
 .check-icon.active { color: var(--van-primary-color, #1989fa); }
 .manage-entry { color: var(--van-primary-color, #1989fa); font-size: 14px; }
 .nav-action { color: var(--van-primary-color, #1989fa); font-size: 14px; margin-right: 14px; }
@@ -486,7 +486,7 @@ async function onBatchDelete() {
 .export-sub { margin: 4px 16px 8px; font-size: 13px; color: var(--van-text-color-2, #646566); }
 .export-foot { display: flex; gap: 12px; padding: 10px 16px; }
 .row1 { display: flex; justify-content: space-between; font-weight: 600; }
-.amount { color: #ee0a24; }
+.amount { color: var(--van-danger-color); }
 .row2 { color: var(--van-text-color-2, #646566); font-size: 13px; margin: 6px 0; }
 .row3 { display: flex; align-items: center; gap: 8px; color: var(--van-text-color-3, #969799); font-size: 12px; }
 .cal-footer { display: flex; gap: 12px; padding: 10px 16px; }

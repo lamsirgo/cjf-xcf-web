@@ -77,12 +77,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject, onActivated, onDeactivated, onUnmounted, ref } from 'vue'
+import { computed, inject, onActivated, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { showToast } from 'vant'
 import { listApps, type AppItem } from '@/api/apps'
 import { listNotifications } from '@/api/notifications'
 import { listPackages, type PackageItem } from '@/api/packages'
+import { onNotifyEvent } from '@/composables/notification-sse'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
@@ -93,7 +94,11 @@ const { dark, toggleDark } = inject<{ dark: { value: boolean }; toggleDark: () =
 const apps = ref<AppItem[]>([])
 const recent = ref<PackageItem[]>([])
 const unreadCount = ref(0)
-let unreadTimer: ReturnType<typeof setInterval> | null = null
+
+// SSE：新通知到达时即时刷新未读数（替代 30 秒轮询）
+onNotifyEvent((event) => {
+  if (event.type === 'notification') loadUnreadCount()
+})
 
 const greeting = computed(() => {
   const h = new Date().getHours()
@@ -168,9 +173,6 @@ async function loadUnreadCount() {
 onActivated(async () => {
   await auth.fetchMe().catch(() => {})
   await loadUnreadCount()
-  if (unreadTimer === null) {
-    unreadTimer = setInterval(loadUnreadCount, 30_000)
-  }
 
   const cached = loadCachedApps()
   if (cached) apps.value = cached
@@ -185,20 +187,6 @@ onActivated(async () => {
     saveCachedApps(appData.list)
   }
   recent.value = pkgData?.list.slice(0, 2) ?? []
-})
-
-onDeactivated(() => {
-  if (unreadTimer !== null) {
-    clearInterval(unreadTimer)
-    unreadTimer = null
-  }
-})
-
-onUnmounted(() => {
-  if (unreadTimer !== null) {
-    clearInterval(unreadTimer)
-    unreadTimer = null
-  }
 })
 </script>
 
@@ -249,7 +237,7 @@ onUnmounted(() => {
   justify-content: center;
   font-size: 22px;
   background: var(--van-background-3, #f2f3f5);
-  color: #c8c9cc;
+  color: var(--van-gray-5);
 }
 .tname { font-size: 12px; color: var(--van-text-color-3, #969799); }
 .tile.is-off { opacity: .6; }
@@ -266,8 +254,8 @@ onUnmounted(() => {
   line-height: 14px;
 }
 .tile.is-selected { border-color: rgba(25, 137, 250, .5); }
-.tile.is-selected .tic { background: #ecf5ff; color: #1989fa; }
-.tile.is-selected .tname { color: #1989fa; font-weight: 500; }
+.tile.is-selected .tic { background: #ecf5ff; color: var(--van-primary-color); }
+.tile.is-selected .tname { color: var(--van-primary-color); font-weight: 500; }
 
 .quota-card {
   background: var(--van-background-2, #fff);
@@ -280,13 +268,13 @@ onUnmounted(() => {
 .q-warn {
   margin-top: 10px;
   font-size: 12px;
-  color: #ee0a24;
+  color: var(--van-danger-color);
   display: flex;
   align-items: center;
   gap: 4px;
 }
 .q-foot { margin-top: 10px; display: flex; justify-content: space-between; font-size: 12px; color: var(--van-text-color-3, #969799); }
-.q-go { color: #1989fa; }
+.q-go { color: var(--van-primary-color); }
 
 .empty {
   background: var(--van-background-2, #fff);

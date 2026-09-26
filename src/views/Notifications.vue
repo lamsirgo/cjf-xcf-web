@@ -34,6 +34,7 @@
 import { onActivated, ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { listNotifications, readAllNotifications, type NotificationItem } from '@/api/notifications'
+import { onNotifyEvent } from '@/composables/notification-sse'
 import { resignExport } from '@/api/invoices'
 
 const router = useRouter()
@@ -98,11 +99,19 @@ async function onDownloadExport(n: NotificationItem) {
 }
 
 onActivated(load)
+
+// SSE：新通知实时插到列表顶部（去重，避免与全量加载重复）
+onNotifyEvent((event) => {
+  const n = event.notification
+  if (event.type === 'notification' && n && !list.value.some((x) => x.id === n.id)) {
+    list.value.unshift(n)
+  }
+})
 </script>
 
 <style scoped>
 .page { min-height: 100vh; background: var(--van-background, #f6f7f9); }
-.read-all { font-size: 14px; color: #1989fa; }
+.read-all { font-size: 14px; color: var(--van-primary-color); }
 .list { padding: 10px 0 72px; }
 .notice-card {
   margin: 8px 12px;
@@ -110,10 +119,10 @@ onActivated(load)
   background: var(--van-background-2, #fff);
   border-radius: 8px;
 }
-.notice-card.unread { border-left: 3px solid #1989fa; }
+.notice-card.unread { border-left: 3px solid var(--van-primary-color); }
 .n-head { display: flex; justify-content: space-between; align-items: center; }
 .n-title { font-weight: 600; font-size: 14px; color: var(--van-text-color, #323233); }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: #ee0a24; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--van-danger-color); }
 .n-content {
   margin: 6px 0 0;
   font-size: 13px;

@@ -116,5 +116,5 @@ onUnmounted(() => {
   line-height: 1.5;
 }
 .submit-wrap { margin: 24px 16px; text-align: center; }
-.link { display: inline-block; margin-top: 16px; color: #1989fa; font-size: 14px; }
+.link { display: inline-block; margin-top: 16px; color: var(--van-primary-color); font-size: 14px; }
 </style>

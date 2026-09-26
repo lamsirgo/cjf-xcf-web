@@ -12,3 +12,6 @@ export const listNotifications = () =>
   request.get<any, { list: NotificationItem[] }>('/notifications')
 
 export const readAllNotifications = () => request.post('/notifications/read-all')
+
+export const fetchNotifyTicket = () =>
+  request.get<any, { ticket: string; expires_in: number }>('/notifications/ticket')

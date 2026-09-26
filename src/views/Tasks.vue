@@ -341,7 +341,7 @@ onDeactivated(() => {
   color: var(--van-text-color-2, #646566);
   font-size: 12px;
 }
-.chip.active { background: #ecf5ff; color: #1989fa; font-weight: 500; }
+.chip.active { background: #ecf5ff; color: var(--van-primary-color); font-weight: 500; }
 .chip.is-off { opacity: .5; }
 .task-scroll {
   flex: 1;
@@ -354,12 +354,12 @@ onDeactivated(() => {
 .pkg-name { display: flex; justify-content: space-between; align-items: center; }
 .fname { font-weight: 600; word-break: break-all; }
 .pkg-sub { color: var(--van-text-color-3, #969799); font-size: 12px; margin: 6px 0; }
-.pkg-detail { color: #1989fa; font-size: 11px; margin-top: 2px; }
+.pkg-detail { color: var(--van-primary-color); font-size: 11px; margin-top: 2px; }
 .skeleton-card { padding: 16px 12px; }
 .pkg-actions { margin-top: 8px; text-align: right; }
 .pkg-files { border-top: 1px dashed var(--van-border-color, #ebedf0); margin-top: 8px; padding-top: 8px; }
 .file-row { font-size: 12px; padding: 4px 0; }
 .f-name { margin-right: 8px; }
-.f-err { color: #ee0a24; margin-top: 2px; word-break: break-all; }
+.f-err { color: var(--van-danger-color); margin-top: 2px; word-break: break-all; }
 .f-guide { color: var(--van-text-color-3, #969799); margin-top: 2px; }
 </style>

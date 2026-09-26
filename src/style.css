@@ -50,3 +50,8 @@ html.van-theme-dark .chip.active { background: #1a3a5c !important; color: #409ef
 html.van-theme-dark .tile.is-selected .tic { background: #1a3a5c !important; color: #409eff !important; }
 html.van-theme-dark .tile.is-selected .tname { color: #409eff !important; }
 html.van-theme-dark .pkg-files { border-top-color: #3a3a3a !important; }
+html.van-theme-dark .tile.is-beta .tic { background: #3a2a14 !important; color: #ff976a !important; }
+
+/* 发票详情：失败原因卡片（浅色主题为琥珀色系） */
+html.van-theme-dark .fail-card { background: #2a2a2a !important; border-color: #5c4a1a !important; }
+html.van-theme-dark .fail-head { color: #e6a23c !important; }

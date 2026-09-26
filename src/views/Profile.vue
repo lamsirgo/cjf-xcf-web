@@ -32,6 +32,7 @@
         </template>
       </van-cell>
       <van-cell title="账号与安全" is-link @click="openSecurity" />
+      <van-cell title="额度流水" is-link @click="router.push('/quota-logs')" />
       <van-cell title="我的导出" is-link @click="showExport = true" />
       <van-cell title="联系客服" is-link @click="showToast('客服功能即将上线')" />
       <van-cell title="关于平台" is-link @click="showAbout = true" />
@@ -375,8 +376,8 @@ html.van-theme-dark .quota-alert {
 .export-row { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--van-border-color, #f0f0f0); font-size: 13px; }
 .export-info { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .export-scope { font-size: 12px; color: var(--van-text-color-3, #969799); }
-.export-err { font-size: 12px; color: #ee0a24; word-break: break-all; }
-.dl { margin-left: auto; color: #1989fa; }
+.export-err { font-size: 12px; color: var(--van-danger-color); word-break: break-all; }
+.dl { margin-left: auto; color: var(--van-primary-color); }
 
 .about { padding: 8px 16px 20px; text-align: center; color: var(--van-text-color-3, #969799); font-size: 12px; }
 .about p { margin: 4px 0; }

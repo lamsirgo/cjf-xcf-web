@@ -51,9 +51,9 @@ async function onSubmit() {
 <style scoped>
 .auth-page { padding-top: 12vh; }
 .logo { text-align: center; margin-bottom: 32px; }
-.logo h2 { margin: 0 0 8px; color: #1989fa; }
-.logo p { margin: 0; color: #969799; font-size: 13px; }
+.logo h2 { margin: 0 0 8px; color: var(--van-primary-color); }
+.logo p { margin: 0; color: var(--van-gray-6); font-size: 13px; }
 .submit-wrap { margin: 24px 16px; text-align: center; }
 .links { display: flex; justify-content: space-between; margin-top: 16px; }
-.link { color: #1989fa; font-size: 14px; }
+.link { color: var(--van-primary-color); font-size: 14px; }
 </style>

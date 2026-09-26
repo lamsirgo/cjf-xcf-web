@@ -70,7 +70,9 @@ request.interceptors.response.use(
         body = undefined
       }
     }
-    const config = error.config as (typeof error.config & { _retried?: boolean }) | undefined
+    const config = error.config as
+      | (typeof error.config & { _retried?: boolean; _silent?: boolean })
+      | undefined
 
     if (status === 401 && config) {
       // token 过期：尝试刷新一次后重放原请求
@@ -84,7 +86,7 @@ request.interceptors.response.use(
       }
     }
 
-    showToast(body?.msg || error.message || '网络错误')
+    if (!config?._silent) showToast(body?.msg || error.message || '网络错误')
     return Promise.reject(error)
   },
 )

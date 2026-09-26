@@ -5,8 +5,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, provide } from 'vue'
+import { ref, provide, watch } from 'vue'
+import { useAuthStore } from './stores/auth'
+import { startNotificationSse, stopNotificationSse } from './composables/notification-sse'
 
+const auth = useAuthStore()
 const dark = ref(localStorage.getItem('h5-theme') === 'dark')
 
 function toggleDark(val?: boolean) {
@@ -15,4 +18,13 @@ function toggleDark(val?: boolean) {
 }
 
 provide('h5-dark', { dark, toggleDark })
+
+watch(
+  () => auth.isLoggedIn,
+  (logged) => {
+    if (logged) startNotificationSse()
+    else stopNotificationSse()
+  },
+  { immediate: true }
+)
 </script>
