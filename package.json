@@ -10,10 +10,15 @@
   },
   "dependencies": {
     "axios": "^1.7.9",
+    "comlink": "^4.4.2",
+    "jsqr": "^1.4.0",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.3.289",
     "pinia": "^2.3.0",
     "vant": "^4.9.15",
     "vue": "^3.5.13",
-    "vue-router": "^4.5.0"
+    "vue-router": "^4.5.0",
+    "zxing-wasm": "^3.1.4"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
@@ -23,6 +28,9 @@
     "vue-tsc": "^2.2.0"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild", "vue-demi"]
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "vue-demi"
+    ]
   }
 }

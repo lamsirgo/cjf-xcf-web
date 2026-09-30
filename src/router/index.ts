@@ -23,6 +23,8 @@ const router = createRouter({
     { path: '/app/invoice', component: () => import('@/views/InvoiceApp.vue'), meta: { title: '发票识别' } },
     { path: '/app/invoice/list', component: () => import('@/views/Invoices.vue'), meta: { title: '发票库' } },
     { path: '/app/invoice/:id', component: () => import('@/views/InvoiceDetail.vue'), meta: { title: '发票详情' } },
+    // 子应用：发票合并打印（票据全程浏览器本地处理）
+    { path: '/app/print', component: () => import('@/views/print/PrintApp.vue'), meta: { title: '发票合并打印' } },
   ],
 })
 
