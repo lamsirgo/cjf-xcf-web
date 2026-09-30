@@ -50,10 +50,28 @@ interface ChangelogEntry {
   fix: string[]
 }
 
-const CURRENT_VERSION = 'v1.1.0'
+const CURRENT_VERSION = 'v1.2.0'
 const READ_KEY = 'print_changelog_read'
 
 const entries: ChangelogEntry[] = [
+  {
+    version: 'v1.2.0',
+    date: '2026-09-30',
+    add: [
+      '纸张规格：新增 A5 / B5 与自定义尺寸（50~500mm 任意设定）',
+      '打印校准：水平 / 垂直偏移微调，可打印带网格的校准测试页，解决套打错位',
+      '文件夹批量导入：一次选择整个文件夹，自动筛选其中的票据文件',
+      '系统分享：合并 PDF 可直接分享到微信、邮件等应用',
+    ],
+    optimize: [
+      '预览虚拟化：仅绘制可视区域附近页面，大量票据时滚动更流畅、占用内存显著降低',
+      '识别加速：多 Worker 并行扫描，失败自动重试',
+      '导出体验：Chromium 浏览器支持选择保存位置',
+      '草稿存储升级为 OPFS，大文件存取更稳定（环境不支持时自动回退）',
+      '本地数据支持分级清理：清空全部 / 仅清识别结果 / 仅恢复默认设置',
+    ],
+    fix: [],
+  },
   {
     version: 'v1.1.0',
     date: '2026-09-30',

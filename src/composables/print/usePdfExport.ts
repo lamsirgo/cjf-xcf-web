@@ -32,6 +32,54 @@ function downloadPdf(bytes: Uint8Array, name: string) {
   setTimeout(() => URL.revokeObjectURL(url), 5000)
 }
 
+interface SavePickerOptions {
+  suggestedName?: string
+  types?: { description?: string; accept: Record<string, string[]> }[]
+}
+
+type PickerWindow = Window & {
+  showSaveFilePicker?: (opts: SavePickerOptions) => Promise<FileSystemFileHandle>
+}
+
+/**
+ * Chromium 系：弹出系统保存对话框，由用户选择保存位置。
+ * 返回 saved/cancelled/unavailable。
+ */
+async function saveWithPicker(bytes: Uint8Array, name: string) {
+  const picker = (window as PickerWindow).showSaveFilePicker
+  if (!picker) return 'unavailable' as const
+  let handle: FileSystemFileHandle
+  try {
+    handle = await picker({
+      suggestedName: name,
+      types: [{ description: 'PDF 文件', accept: { 'application/pdf': ['.pdf'] } } as const],
+    })
+  } catch (err) {
+    if ((err as DOMException).name === 'AbortError') return 'cancelled' as const
+    throw err
+  }
+  const writable = await (
+    handle as FileSystemFileHandle & {
+      createWritable: () => Promise<FileSystemWritableFileStream>
+    }
+  ).createWritable()
+  try {
+    await writable.write(bytes.slice())
+  } finally {
+    await writable.close()
+  }
+  return 'saved' as const
+}
+
+/** 统一保存：优先系统保存对话框，不可用或取消则回退下载 */
+async function persistPdf(bytes: Uint8Array, name: string): Promise<'saved' | 'cancelled'> {
+  const result = await saveWithPicker(bytes, name)
+  if (result === 'saved') return 'saved'
+  if (result === 'cancelled') return 'cancelled'
+  downloadPdf(bytes, name)
+  return 'saved'
+}
+
 export function usePdfExport(
   getSheets: () => SheetLayout[],
   getFiles: () => SourceFile[],
@@ -59,14 +107,53 @@ export function usePdfExport(
     exporting.value = true
     try {
       const bytes = await ensureWorker().render(sheets, decor, filePayload)
-      downloadPdf(
-        bytes,
-        scope === 'current' ? '发票打印-当前页.pdf' : `发票合并打印-${sheets.length}页.pdf`,
-      )
+      const name = scope === 'current' ? '发票打印-当前页.pdf' : `发票合并打印-${sheets.length}页.pdf`
+      await persistPdf(bytes, name)
     } finally {
       exporting.value = false
     }
   }
 
-  return { exporting, doExport }
+  /** 系统分享：把合并 PDF 交给微信/邮件等（不支持的浏览器抛错） */
+  async function sharePdf() {
+    if (exporting.value) return
+    const sheets = getSheets()
+    if (sheets.length === 0) throw new Error('暂无可分享的内容')
+
+    const decor = sheets.map((s) => buildSheetDecor(s, getDecorator()))
+    const filePayload = getFiles().map((f) => ({ id: f.id, ext: f.ext, buffer: f.buffer }))
+
+    exporting.value = true
+    try {
+      const bytes = await ensureWorker().render(sheets, decor, filePayload)
+      const file = new File([bytes.slice()], `发票合并打印-${sheets.length}页.pdf`, {
+        type: 'application/pdf',
+      })
+      if (!navigator.canShare?.({ files: [file] })) {
+        throw new Error('当前浏览器不支持分享文件')
+      }
+      await navigator.share({ files: [file], title: '发票合并打印' })
+    } finally {
+      exporting.value = false
+    }
+  }
+
+  /** 打印校准测试页 */
+  async function printTestPage(
+    widthPt: number,
+    heightPt: number,
+    offsetXPt: number,
+    offsetYPt: number,
+  ) {
+    if (exporting.value) return
+    exporting.value = true
+    try {
+      const bytes = await ensureWorker().renderCalibration(widthPt, heightPt, offsetXPt, offsetYPt)
+      await persistPdf(bytes, '发票打印-校准测试页.pdf')
+    } finally {
+      exporting.value = false
+    }
+  }
+
+  return { exporting, doExport, sharePdf, printTestPage }
 }

@@ -21,7 +21,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { buildSheetDecor } from '@/lib/print/decor'
 import type { DecoratorSpec, SheetLayout, SourceFile } from '@/lib/print/types'
 
@@ -37,18 +37,23 @@ const scrollEl = ref<HTMLElement | null>(null)
 const currentIndex = ref(0)
 const cssWidth = ref(320)
 
+/** 视口前后各渲染多少页，其余 canvas 回收显存 */
+const RENDER_MARGIN = 2
+
 /** pageId → 缩略图 URL */
-const thumbMap = computed(() => {
-  const m = new Map<string, string>()
-  for (const f of props.files) for (const p of f.pages) m.set(p.id, p.thumbUrl)
-  return m
-})
+function thumbOf(pageId: string): string | undefined {
+  for (const f of props.files) {
+    const hit = f.pages.find((p) => p.id === pageId)
+    if (hit) return hit.thumbUrl
+  }
+  return undefined
+}
 
 const imageCache = new Map<string, HTMLImageElement>()
 function getImage(pageId: string): Promise<HTMLImageElement | null> {
   const cached = imageCache.get(pageId)
   if (cached) return Promise.resolve(cached)
-  const url = thumbMap.value.get(pageId)
+  const url = thumbOf(pageId)
   if (!url) return Promise.resolve(null)
   return new Promise((resolve) => {
     const img = new Image()
@@ -61,14 +66,28 @@ function getImage(pageId: string): Promise<HTMLImageElement | null> {
   })
 }
 
-async function drawSheet(canvas: HTMLCanvasElement, sheet: SheetLayout) {
+interface Slot {
+  idx: number
+  el: HTMLElement
+  canvas: HTMLCanvasElement
+  drawn: boolean
+}
+
+let slots: Slot[] = []
+let generation = 0
+let io: IntersectionObserver | null = null
+const visibleIdx = new Set<number>()
+
+async function drawSlot(slot: Slot, gen: number) {
+  const sheet = props.sheets[slot.idx]
+  if (!sheet) return
   const w = cssWidth.value
   const h = (w * sheet.height) / sheet.width
   const dpr = Math.min(window.devicePixelRatio || 1, 2.5)
-  canvas.width = Math.round(w * dpr)
-  canvas.height = Math.round(h * dpr)
+  slot.canvas.width = Math.round(w * dpr)
+  slot.canvas.height = Math.round(h * dpr)
 
-  const ctx = canvas.getContext('2d')
+  const ctx = slot.canvas.getContext('2d')
   if (!ctx) return
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.fillStyle = '#ffffff'
@@ -80,6 +99,7 @@ async function drawSheet(canvas: HTMLCanvasElement, sheet: SheetLayout) {
 
   for (const p of sheet.placements) {
     const img = await getImage(p.pageId)
+    if (gen !== generation) return // 已被新一次重绘取代
     if (img) ctx.drawImage(img, p.x, p.y, p.width, p.height)
   }
 
@@ -105,40 +125,91 @@ async function drawSheet(canvas: HTMLCanvasElement, sheet: SheetLayout) {
     }
   }
   ctx.restore()
+  if (gen === generation) slot.drawn = true
 }
 
-let io: IntersectionObserver | null = null
+/** 回收画布显存 */
+function release(slot: Slot) {
+  slot.canvas.width = 2
+  slot.canvas.height = 2
+  slot.drawn = false
+}
 
-async function redraw() {
+/** 依据当前可见页集合，绘制窗口内、回收窗口外 */
+function syncWindow() {
+  const gen = generation
+  if (visibleIdx.size === 0) {
+    // 初始/无观测信息：只画第一屏
+    visibleIdx.add(0)
+  }
+  let lo = Infinity
+  let hi = -Infinity
+  for (const i of visibleIdx) {
+    lo = Math.min(lo, i)
+    hi = Math.max(hi, i)
+  }
+  lo = Math.max(0, lo - RENDER_MARGIN)
+  hi = Math.min(props.sheets.length - 1, hi + RENDER_MARGIN)
+
+  for (const slot of slots) {
+    const inWindow = slot.idx >= lo && slot.idx <= hi
+    if (inWindow && !slot.drawn) void drawSlot(slot, gen)
+    else if (!inWindow && slot.drawn) release(slot)
+  }
+}
+
+async function rebuild() {
   await nextTick()
   const root = scrollEl.value
   if (!root) return
 
-  const sheetEls = Array.from(root.querySelectorAll<HTMLElement>('.pv-sheet'))
-  await Promise.all(
-    sheetEls.map((el) => {
-      const canvas = el.querySelector('canvas')
-      const sheet = props.sheets[sheetEls.indexOf(el)]
-      return canvas && sheet ? drawSheet(canvas, sheet) : null
-    }),
-  )
+  generation += 1
+  const els = Array.from(root.querySelectorAll<HTMLElement>('.pv-sheet'))
+  slots = els.map((el, idx) => ({
+    idx,
+    el,
+    canvas: el.querySelector('canvas') as HTMLCanvasElement,
+    drawn: false,
+  }))
+  visibleIdx.clear()
 
   io?.disconnect()
   io = new IntersectionObserver(
     (entries) => {
+      let changed = false
       for (const entry of entries) {
+        const slot = slots.find((s) => s.el === entry.target)
+        if (!slot) continue
         if (entry.isIntersecting) {
-          const idx = sheetEls.indexOf(entry.target as HTMLElement)
-          if (idx >= 0 && idx !== currentIndex.value) {
-            currentIndex.value = idx
-            emit('update:current', idx)
+          if (!visibleIdx.has(slot.idx)) {
+            visibleIdx.add(slot.idx)
+            changed = true
           }
+          if (entry.intersectionRatio >= 0.45 && slot.idx !== currentIndex.value) {
+            currentIndex.value = slot.idx
+            emit('update:current', slot.idx)
+          }
+        } else if (visibleIdx.has(slot.idx)) {
+          visibleIdx.delete(slot.idx)
+          changed = true
         }
       }
+      if (changed) syncWindow()
     },
-    { root, threshold: 0.45 },
+    { root, threshold: [0, 0.45] },
   )
-  for (const el of sheetEls) io.observe(el)
+  for (const slot of slots) io.observe(slot.el)
+
+  // 兜底：若回调尚未触发，按几何位置初始化可见集合
+  await nextTick()
+  if (visibleIdx.size === 0) {
+    const vh = window.innerHeight || document.documentElement.clientHeight
+    for (const slot of slots) {
+      const r = slot.el.getBoundingClientRect()
+      if (r.bottom > 0 && r.top < vh) visibleIdx.add(slot.idx)
+    }
+  }
+  syncWindow()
 }
 
 function measure() {
@@ -152,10 +223,10 @@ onMounted(() => {
   measure()
   ro = new ResizeObserver(() => {
     measure()
-    void redraw()
+    void rebuild()
   })
   if (rootEl.value) ro.observe(rootEl.value)
-  void redraw()
+  void rebuild()
 })
 
 onBeforeUnmount(() => {
@@ -165,7 +236,7 @@ onBeforeUnmount(() => {
 
 watch(
   () => [props.sheets, props.decorator],
-  () => void redraw(),
+  () => void rebuild(),
   { deep: true },
 )
 </script>

@@ -7,6 +7,7 @@ import type {
   LayoutPreset,
   LayoutSpec,
   Orientation,
+  PaperKind,
 } from '@/lib/print/types'
 
 const STORAGE_KEY = 'print_settings_v1'
@@ -22,7 +23,12 @@ export interface SettingsState {
   customRows: number
   customCols: number
   orientation: Orientation
+  paper: PaperKind
+  customWidthMm: number
+  customHeightMm: number
   marginMm: number
+  offsetXMm: number
+  offsetYMm: number
   numbering: boolean
   divider: DividerStyle
   duplex: boolean
@@ -33,7 +39,12 @@ const DEFAULT_STATE: SettingsState = {
   customRows: 3,
   customCols: 3,
   orientation: 'portrait',
+  paper: 'A4',
+  customWidthMm: 210,
+  customHeightMm: 297,
   marginMm: 12,
+  offsetXMm: 0,
+  offsetYMm: 0,
   numbering: false,
   divider: 'dashed',
   duplex: false,
@@ -69,8 +80,12 @@ export function usePrintSettings() {
       rows: grid.rows,
       cols: grid.cols,
       orientation: state.orientation,
-      paper: 'A4',
+      paper: state.paper,
+      customWidthMm: state.customWidthMm,
+      customHeightMm: state.customHeightMm,
       marginMm: state.marginMm,
+      offsetXMm: state.offsetXMm,
+      offsetYMm: state.offsetYMm,
     }
   })
 
@@ -92,5 +107,10 @@ export function usePrintSettings() {
     { deep: true },
   )
 
-  return { state, selectPreset, layoutSpec, decorator }
+  /** 恢复默认设置 */
+  function resetSettings() {
+    Object.assign(state, DEFAULT_STATE)
+  }
+
+  return { state, selectPreset, layoutSpec, decorator, resetSettings }
 }

@@ -3,7 +3,7 @@
     <van-nav-bar title="发票合并打印" left-arrow @click-left="router.back()">
       <template #right>
         <van-icon name="info-o" class="nav-info" @click="showChangelog = true" />
-        <span v-if="fileCount > 0" class="nav-clear" @click="onClear">清空</span>
+        <span v-if="fileCount > 0" class="nav-clear" @click="openCleanup">清空</span>
       </template>
     </van-nav-bar>
 
@@ -12,6 +12,9 @@
       <van-icon name="add-o" class="ic-add" />
       <div class="ic-title">添加票据文件</div>
       <div class="ic-cap">支持 PDF / PNG / JPG，可多选；也可直接 Ctrl+V 粘贴截图</div>
+      <div class="ic-folder" @click.stop="triggerPickFolder">
+        <van-icon name="directory" /> 选择整个文件夹
+      </div>
     </div>
     <input
       ref="fileInput"
@@ -20,6 +23,15 @@
       accept=".pdf,.png,.jpg,.jpeg"
       hidden
       @change="onFileInput"
+    />
+    <input
+      ref="folderInput"
+      type="file"
+      multiple
+      webkitdirectory
+      directory
+      hidden
+      @change="onFolderInput"
     />
 
     <!-- 文件统计 / 管理入口 -->
@@ -44,7 +56,7 @@
 
     <!-- ② 版式设置 -->
     <div class="card">
-      <PrintLayoutPanel :state="state" @select="selectPreset" />
+      <PrintLayoutPanel :state="state" @select="selectPreset" @test="onPrintTest" />
     </div>
 
     <!-- ③ 装饰设置 -->
@@ -64,6 +76,15 @@
 
     <!-- ⑤ 导出 -->
     <div class="bottom-bar">
+      <van-button
+        plain
+        type="primary"
+        class="share-btn"
+        icon="share-o"
+        :loading="exporting"
+        :disabled="sheets.length === 0"
+        @click="onShare"
+      />
       <van-button
         plain
         type="primary"
@@ -132,6 +153,16 @@
 
     <!-- 更新日志 -->
     <PrintChangelog v-model:show="showChangelog" />
+
+    <!-- 分级清理 -->
+    <van-action-sheet
+      v-model:show="showCleanup"
+      title="本地数据清理"
+      :actions="cleanupActions"
+      cancel-text="取消"
+      close-on-click-action
+      @select="onCleanupSelect"
+    />
   </div>
 </template>
 
@@ -149,6 +180,7 @@ import { getPrintLimits } from '@/api/print'
 import { computeLayout } from '@/lib/print/layout'
 import {
   FALLBACK_LIMITS,
+  PAPER_SIZES,
   type PrintLimits,
 } from '@/lib/print/types'
 import { useDraft } from '@/composables/print/useDraft'
@@ -181,7 +213,7 @@ const {
   moveFile,
 } = useFileSet(limits)
 
-const { state, selectPreset, layoutSpec, decorator } = usePrintSettings()
+const { state, selectPreset, layoutSpec, decorator, resetSettings } = usePrintSettings()
 
 const sheets = computed(() =>
   computeLayout(layoutSpec.value, allPages.value, { duplex: decorator.value.duplex }),
@@ -189,8 +221,9 @@ const sheets = computed(() =>
 const current = ref(0)
 const showFiles = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
+const folderInput = ref<HTMLInputElement | null>(null)
 
-const { exporting, doExport } = usePdfExport(
+const { exporting, doExport, sharePdf, printTestPage } = usePdfExport(
   () => sheets.value,
   () => files.value,
   () => decorator.value,
@@ -301,6 +334,10 @@ function triggerPick() {
   fileInput.value?.click()
 }
 
+function triggerPickFolder() {
+  folderInput.value?.click()
+}
+
 async function onFileInput(e: Event) {
   const input = e.target as HTMLInputElement
   if (!input.files || input.files.length === 0) return
@@ -310,6 +347,25 @@ async function onFileInput(e: Event) {
     showFailToast((err as Error).message)
   }
   input.value = ''
+}
+
+async function onFolderInput(e: Event) {
+  const input = e.target as HTMLInputElement
+  if (!input.files || input.files.length === 0) return
+  // 文件夹内只取受支持的票据类型，忽略 .DS_Store 等无关文件
+  const supported = Array.from(input.files).filter((f) =>
+    /\.(pdf|png|jpe?g)$/i.test(f.name),
+  )
+  input.value = ''
+  if (supported.length === 0) {
+    showFailToast('该文件夹中未找到 PDF/PNG/JPG 票据文件')
+    return
+  }
+  try {
+    await addFiles(supported)
+  } catch (err) {
+    showFailToast((err as Error).message)
+  }
 }
 
 async function onPaste(e: ClipboardEvent) {
@@ -337,6 +393,41 @@ async function onClear() {
   await clearDraft().catch(() => {})
 }
 
+/** 立即把当前识别结果写回草稿（供分级清理后同步） */
+function persistNow() {
+  if (files.value.length === 0) {
+    void clearDraft()
+    return
+  }
+  const raws = files.value.map((f) => f.origFile).filter(Boolean) as File[]
+  void saveDraft(raws, { ...state }, metas.value, dupIgnored.value).catch(() => {})
+}
+
+/** 分级清理：全部 / 仅识别结果 / 仅设置 */
+const showCleanup = ref(false)
+const cleanupActions = [
+  { name: '清空全部文件与本地数据' },
+  { name: '仅清空识别结果（保留文件）' },
+  { name: '仅恢复默认设置（保留文件）' },
+]
+
+async function onCleanupSelect(_action: unknown, index: number) {
+  if (index === 0) {
+    await onClear()
+  } else if (index === 1) {
+    resetResults()
+    persistNow()
+    showSuccessToast('识别结果已清空')
+  } else {
+    resetSettings()
+    showSuccessToast('已恢复默认设置')
+  }
+}
+
+function openCleanup() {
+  showCleanup.value = true
+}
+
 async function onRemove(id: string) {
   removeFile(id)
 }
@@ -346,6 +437,40 @@ async function onExport(scope: 'all' | 'current') {
   try {
     await doExport(scope, current.value)
     showSuccessToast('导出成功')
+  } catch (err) {
+    showFailToast((err as Error).message)
+  }
+}
+
+async function onShare() {
+  try {
+    await sharePdf()
+  } catch (err) {
+    const name = (err as DOMException).name
+    if (name === 'AbortError') return // 用户在系统分享面板取消
+    showFailToast((err as Error).message)
+  }
+}
+
+/** 打印校准测试页 */
+async function onPrintTest() {
+  try {
+    const spec = layoutSpec.value
+    const base =
+      spec.paper === 'custom'
+        ? { widthMm: spec.customWidthMm, heightMm: spec.customHeightMm }
+        : PAPER_SIZES[spec.paper]
+    const [pageMmW, pageMmH] =
+      spec.orientation === 'portrait'
+        ? [base.widthMm, base.heightMm]
+        : [base.heightMm, base.widthMm]
+    const MM = 72 / 25.4
+    await printTestPage(
+      pageMmW * MM,
+      pageMmH * MM,
+      spec.offsetXMm * MM,
+      spec.offsetYMm * MM,
+    )
   } catch (err) {
     showFailToast((err as Error).message)
   }
@@ -456,6 +581,18 @@ onUnmounted(() => {
   margin-top: 6px;
   font-size: 12px;
   color: var(--van-text-color-3, #969799);
+}
+.ic-folder {
+  margin-top: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--van-primary-color);
+}
+.share-btn {
+  flex: 0 0 52px;
+  padding: 0;
 }
 
 .stat-row {

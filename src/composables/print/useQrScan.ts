@@ -12,17 +12,20 @@ import { parseQrText, recognizeStatus } from '@/lib/print/qr'
 import type { InvoiceMeta, SourceFile, TicketPage } from '@/lib/print/types'
 import type { ScanWorkerApi } from '@/workers/print-scan.worker'
 
-let worker: Worker | null = null
-let workerApi: ScanWorkerApi | null = null
+/** 扫描 Worker 池：2~3 个并行，CPU 核数自适应 */
+const POOL_SIZE = Math.min(3, Math.max(2, (navigator.hardwareConcurrency || 4) - 1))
+const pool: { worker: Worker; api: ScanWorkerApi }[] = []
 
-function ensureWorker(): ScanWorkerApi {
-  if (!workerApi) {
-    worker = new Worker(new URL('@/workers/print-scan.worker.ts', import.meta.url), {
-      type: 'module',
-    })
-    workerApi = Comlink.wrap<ScanWorkerApi>(worker)
+function ensurePool() {
+  if (pool.length === 0) {
+    for (let i = 0; i < POOL_SIZE; i += 1) {
+      const w = new Worker(new URL('@/workers/print-scan.worker.ts', import.meta.url), {
+        type: 'module',
+      })
+      pool.push({ worker: w, api: Comlink.wrap<ScanWorkerApi>(w) })
+    }
   }
-  return workerApi
+  return pool
 }
 
 export interface ManualInput {
@@ -77,31 +80,62 @@ export function useQrScan(
     scanning.value = true
     progress.value = { done: 0, total: pages.length }
     try {
-      const api = ensureWorker()
+      const workers = ensurePool()
       const fileById = new Map(getFiles().map((f) => [f.id, f]))
+
+      interface Task {
+        page: TicketPage
+        existing: InvoiceMeta | undefined
+        f: SourceFile | undefined
+      }
+      const tasks: Task[] = []
+      let done = 0
       for (const page of pages) {
         const existing = metaMap.get(page.id)
         // 已有扫描/补录结果（非未识别）默认跳过；unknown 自动重试
         if (!force && existing && existing.status !== 'unknown') {
-          progress.value = { done: progress.value.done + 1, total: pages.length }
+          done += 1
+          progress.value = { done, total: pages.length }
           continue
         }
-        const f = fileById.get(page.fileId)
-        if (f) {
-          try {
-            const r = await api.scan({
-              ext: f.ext,
-              buffer: f.buffer,
-              sourcePage: page.sourcePage,
-            })
-            metaMap.set(page.id, buildMeta(page, r.qrText, r.engine))
-          } catch {
-            // 单页异常：保留旧结果；首次失败则落 unknown，不中断整批
-            if (!existing) metaMap.set(page.id, buildMeta(page, null, null))
-          }
-        }
-        progress.value = { done: progress.value.done + 1, total: pages.length }
+        tasks.push({ page, existing, f: fileById.get(page.fileId) })
       }
+
+      let cursor = 0
+      const run = async (workerIdx: number) => {
+        for (;;) {
+          const i = cursor
+          cursor += 1
+          if (i >= tasks.length) return
+          const { page, existing, f } = tasks[i]
+          if (f) {
+            let ok = false
+            // 失败重试一次，第二次换池内另一个 Worker（排除坏 Worker 干扰）
+            for (let attempt = 0; attempt < 2 && !ok; attempt += 1) {
+              const api = workers[(workerIdx + attempt) % workers.length].api
+              try {
+                const r = await api.scan({
+                  ext: f.ext,
+                  buffer: f.buffer,
+                  sourcePage: page.sourcePage,
+                })
+                metaMap.set(page.id, buildMeta(page, r.qrText, r.engine))
+                ok = true
+              } catch {
+                /* 下一轮重试 */
+              }
+            }
+            // 单页最终失败：保留旧结果；首次失败则落 unknown，不中断整批
+            if (!ok && !existing) metaMap.set(page.id, buildMeta(page, null, null))
+          } else if (!existing) {
+            metaMap.set(page.id, buildMeta(page, null, null))
+          }
+          done += 1
+          progress.value = { done, total: pages.length }
+        }
+      }
+
+      await Promise.all(workers.map((_, idx) => run(idx)))
     } finally {
       scanning.value = false
     }

@@ -6,9 +6,8 @@
  */
 
 import {
-  A4_HEIGHT_PT,
-  A4_WIDTH_PT,
   MM_TO_PT,
+  PAPER_SIZES,
   type LayoutSpec,
   type Placement,
   type SheetLayout,
@@ -52,10 +51,24 @@ export function computeLayout(
   const rows = Math.max(1, Math.trunc(spec.rows))
   const cols = Math.max(1, Math.trunc(spec.cols))
   const portrait = spec.orientation === 'portrait'
-  const sheetWidth = portrait ? A4_WIDTH_PT : A4_HEIGHT_PT
-  const sheetHeight = portrait ? A4_HEIGHT_PT : A4_WIDTH_PT
+
+  // 纸张物理尺寸（竖版基准，横版旋转）
+  const base =
+    spec.paper === 'custom'
+      ? {
+          widthMm: Math.min(500, Math.max(50, spec.customWidthMm || 210)),
+          heightMm: Math.min(700, Math.max(50, spec.customHeightMm || 297)),
+        }
+      : PAPER_SIZES[spec.paper]
+  const baseW = base.widthMm * MM_TO_PT
+  const baseH = base.heightMm * MM_TO_PT
+  const sheetWidth = portrait ? baseW : baseH
+  const sheetHeight = portrait ? baseH : baseW
 
   const margin = Math.max(0, spec.marginMm) * MM_TO_PT
+  // 校准偏移：整体网格平移
+  const offsetX = Math.min(20, Math.max(-20, spec.offsetXMm || 0)) * MM_TO_PT
+  const offsetY = Math.min(20, Math.max(-20, spec.offsetYMm || 0)) * MM_TO_PT
   const cellWidth = (sheetWidth - margin * 2) / cols
   const cellHeight = (sheetHeight - margin * 2) / rows
   const capacity = rows * cols
@@ -74,8 +87,8 @@ export function computeLayout(
   for (const page of pages) {
     const row = Math.floor(indexInSheet / cols)
     const col = indexInSheet % cols
-    const cellX = margin + col * cellWidth
-    const cellY = margin + row * cellHeight
+    const cellX = margin + offsetX + col * cellWidth
+    const cellY = margin + offsetY + row * cellHeight
     const cell = { cellX, cellY, cellWidth, cellHeight }
 
     if (options.duplex) {

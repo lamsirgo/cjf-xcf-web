@@ -17,6 +17,21 @@ export const A4_HEIGHT_PT = 297 * MM_TO_PT // 841.89
 export type Orientation = 'portrait' | 'landscape'
 export type DividerStyle = 'none' | 'dashed' | 'line'
 
+/** 纸张规格 */
+export type PaperKind = 'A4' | 'A5' | 'B5' | 'custom'
+
+export interface PaperSize {
+  widthMm: number
+  heightMm: number
+}
+
+/** 预置纸张（竖版物理尺寸） */
+export const PAPER_SIZES: Record<Exclude<PaperKind, 'custom'>, PaperSize> = {
+  A4: { widthMm: 210, heightMm: 297 },
+  A5: { widthMm: 148, heightMm: 210 },
+  B5: { widthMm: 176, heightMm: 250 },
+}
+
 /** 版式预设（1/2/4 张一页 + 自定义） */
 export type LayoutPreset = 'single' | 'double' | 'quad' | 'custom'
 
@@ -25,8 +40,14 @@ export interface LayoutSpec {
   rows: number
   cols: number
   orientation: Orientation
-  paper: 'A4'
+  paper: PaperKind
+  /** paper='custom' 时的竖版尺寸（mm） */
+  customWidthMm: number
+  customHeightMm: number
   marginMm: number
+  /** 打印校准：整体内容偏移（mm，可为负，补偿打印机走纸偏差） */
+  offsetXMm: number
+  offsetYMm: number
 }
 
 /** 装饰规格 */

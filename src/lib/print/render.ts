@@ -111,3 +111,100 @@ export async function renderPdf(input: RenderInput): Promise<Uint8Array> {
 
   return doc.save()
 }
+
+/**
+ * 打印校准测试页：10mm 网格 + 15mm 基准框 + 当前偏移下的蓝色实际内容框。
+ * 打印时必须选「实际大小/100%」，测量黑框四边边距后调整偏移，直到四边相等。
+ * （标准字体不含中文，说明文字用英文。）
+ */
+export async function renderCalibrationPdf(opts: {
+  widthPt: number
+  heightPt: number
+  offsetXPt: number
+  offsetYPt: number
+}): Promise<Uint8Array> {
+  const { widthPt: w, heightPt: h, offsetXPt: offX, offsetYPt: offY } = opts
+  const doc = await PDFDocument.create()
+  const page = doc.addPage([w, h])
+  const font = await doc.embedFont(StandardFonts.Helvetica)
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold)
+  const black = rgb(0, 0, 0)
+  const gray = rgb(0.78, 0.78, 0.78)
+  const blue = rgb(0.15, 0.38, 0.9)
+
+  const MM = 72 / 25.4
+  const INSET = 15 * MM
+
+  // ① 10mm 网格
+  for (let x = MM; x < w; x += MM) {
+    const at10 = Math.round(x / MM) % 10 === 0
+    page.drawLine({
+      start: { x, y: 0 },
+      end: { x, y: h },
+      thickness: at10 ? 0.4 : 0.2,
+      color: at10 ? rgb(0.68, 0.68, 0.68) : gray,
+    })
+  }
+  for (let y = MM; y < h; y += MM) {
+    const at10 = Math.round(y / MM) % 10 === 0
+    page.drawLine({
+      start: { x: 0, y },
+      end: { x: w, y },
+      thickness: at10 ? 0.4 : 0.2,
+      color: at10 ? rgb(0.68, 0.68, 0.68) : gray,
+    })
+  }
+
+  // ② 15mm 基准框（黑）
+  page.drawRectangle({
+    x: INSET,
+    y: INSET,
+    width: w - INSET * 2,
+    height: h - INSET * 2,
+    borderColor: black,
+    borderWidth: 1.2,
+  })
+
+  // ③ 当前偏移下的实际内容框（蓝）。顶部坐标 +Y 向下 → pdf 底部坐标 -Y
+  page.drawRectangle({
+    x: INSET + offX,
+    y: INSET - offY,
+    width: w - INSET * 2,
+    height: h - INSET * 2,
+    borderColor: blue,
+    borderWidth: 1.2,
+  })
+  // 连接两框左上角，直观显示偏移量
+  page.drawLine({
+    start: { x: INSET, y: h - INSET },
+    end: { x: INSET + offX, y: h - INSET - offY },
+    thickness: 0.8,
+    color: blue,
+  })
+
+  // ④ 中心十字
+  page.drawLine({ start: { x: w / 2 - 6 * MM, y: h / 2 }, end: { x: w / 2 + 6 * MM, y: h / 2 }, thickness: 0.8, color: black })
+  page.drawLine({ start: { x: w / 2, y: h / 2 - 6 * MM }, end: { x: w / 2, y: h / 2 + 6 * MM }, thickness: 0.8, color: black })
+
+  // ⑤ 说明
+  const mmText = (v: number) => `${v >= 0 ? '+' : ''}${(v / MM).toFixed(1)} mm`
+  page.drawText('Print Calibration Page', { x: INSET, y: h - 10 * MM, size: 13, font: bold, color: black })
+  page.drawText(`Offset X: ${mmText(offX)}    Offset Y: ${mmText(offY)}`, {
+    x: INSET,
+    y: h - 17 * MM,
+    size: 10,
+    font,
+    color: black,
+  })
+  const lines = [
+    '1. Print this page at 100% scale (Actual size, do NOT fit to page).',
+    '2. Measure the four margins of the BLACK frame with a ruler.',
+    '3. Adjust X/Y offsets in settings until all four margins are equal.',
+    '4. The BLUE frame shows where content lands with the current offsets.',
+  ]
+  lines.forEach((line, i) => {
+    page.drawText(line, { x: INSET, y: 10 * MM + (lines.length - 1 - i) * 5 * MM, size: 9.5, font, color: black })
+  })
+
+  return doc.save()
+}

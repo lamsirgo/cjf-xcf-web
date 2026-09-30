@@ -5,7 +5,7 @@
 
 import * as Comlink from 'comlink'
 import type { DecorItem } from '@/lib/print/decor'
-import { renderPdf } from '@/lib/print/render'
+import { renderCalibrationPdf, renderPdf } from '@/lib/print/render'
 import type { SheetLayout } from '@/lib/print/types'
 
 const api = {
@@ -15,6 +15,15 @@ const api = {
     files: Parameters<typeof renderPdf>[0]['files'],
   ): Promise<Uint8Array> {
     return renderPdf({ sheets, decor, files })
+  },
+
+  async renderCalibration(
+    widthPt: number,
+    heightPt: number,
+    offsetXPt: number,
+    offsetYPt: number,
+  ): Promise<Uint8Array> {
+    return renderCalibrationPdf({ widthPt, heightPt, offsetXPt, offsetYPt })
   },
 }
 
