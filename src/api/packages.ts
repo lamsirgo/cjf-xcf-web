@@ -56,7 +56,25 @@ const RESUME_STORE_KEY = 'pkg-upload-resume-v1'
 interface InitFileEntry {
   index: number
   filename: string
+  hash: string
   uploaded: number[]
+}
+
+/** 限并发计算文件指纹。
+ *  fileHash 需把单个文件整体读入内存（Web Crypto 限制），若整批 Promise.all
+ *  并发读取，20×20MB 在移动端会造成数百 MB 内存峰值导致浏览器闪退；
+ *  限制 2 路并发把峰值压到约 40MB。 */
+async function computeHashes(files: File[], concurrency = 2): Promise<string[]> {
+  const results = new Array<string>(files.length)
+  let cursor = 0
+  const worker = async () => {
+    while (cursor < files.length) {
+      const i = cursor++
+      results[i] = await fileHash(files[i])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, files.length) }, worker))
+  return results
 }
 
 function loadResumeStore(): Record<string, string> {
@@ -132,15 +150,17 @@ export async function uploadPackagesChunked(
   onProgress?: (p: UploadProgressInfo) => void,
   signal?: AbortSignal,
 ) {
-  const metas = await Promise.all(
-    files.map(async (f) => ({
-      filename: f.name,
-      size: f.size,
-      hash: await fileHash(f),
-      chunk_size: CHUNK_SIZE,
-    })),
-  )
-  const hashes = metas.map((m) => m.hash)
+  const hashes = await computeHashes(files)
+  const metas = files.map((f, i) => ({
+    filename: f.name,
+    size: f.size,
+    hash: hashes[i],
+    chunk_size: CHUNK_SIZE,
+  }))
+  // hash → 本地 File/meta：init 返回的会话下标在续传追加后与本地数组顺序未必一致，
+  // 且一批中可能存在不同目录同名文件，按 filename 反查会串文件，统一按指纹对齐
+  const fileByHash = new Map(hashes.map((h, i) => [h, files[i]]))
+  const metaByHash = new Map(hashes.map((h, i) => [h, metas[i]]))
   const total = files.reduce((s, f) => s + f.size, 0)
 
   // 仅当本批所有文件指向同一个未删会话时才续传
@@ -166,7 +186,7 @@ export async function uploadPackagesChunked(
   for (const entry of initData.files) {
     loaded += entry.uploaded.length * CHUNK_SIZE
     // 最后一片按实际大小修正，避免进度超过 100%
-    const meta = metas.find((m) => m.filename === entry.filename)
+    const meta = metaByHash.get(entry.hash)
     if (meta && entry.uploaded.includes(Math.ceil(meta.size / CHUNK_SIZE) - 1)) {
       const remainder = meta.size % CHUNK_SIZE || CHUNK_SIZE
       loaded += remainder - CHUNK_SIZE
@@ -175,7 +195,8 @@ export async function uploadPackagesChunked(
   onProgress?.({ loaded, total, percent: Math.round((loaded / total) * 1000) / 10 })
 
   for (const entry of initData.files) {
-    const file = files.find((f) => f.name === entry.filename)!
+    const file = fileByHash.get(entry.hash)
+    if (!file) continue
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
     const done = new Set(entry.uploaded)
     for (let ci = 0; ci < totalChunks; ci++) {

@@ -3,7 +3,7 @@
  * 不拦截 /api、/files 等接口请求，避免破坏登录与上传。
  * 升级时修改 SW_VERSION 即可使旧缓存失效。
  */
-var SW_VERSION = 'v1';
+var SW_VERSION = 'v2';
 var PRECACHE = 'precache-' + SW_VERSION;
 var RUNTIME = 'runtime-' + SW_VERSION;
 var CORE_ASSETS = ['/', '/offline.html', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'];
@@ -54,10 +54,13 @@ self.addEventListener('fetch', function (event) {
     event.respondWith(
       fetch(req)
         .then(function (resp) {
-          var copy = resp.clone();
-          caches.open(RUNTIME).then(function (cache) {
-            cache.put('/', copy);
-          });
+          // 仅缓存正常导航响应；502/500 等错误页不得写入离线首页缓存
+          if (resp && resp.ok) {
+            var copy = resp.clone();
+            caches.open(RUNTIME).then(function (cache) {
+              cache.put('/', copy);
+            });
+          }
           return resp;
         })
         .catch(function () {
