@@ -77,15 +77,32 @@ async function computeHashes(files: File[], concurrency = 2): Promise<string[]> 
   return results
 }
 
-function loadResumeStore(): Record<string, string> {
+interface ResumeEntry {
+  /** 服务端分片会话 ID */
+  s: string
+  /** 本次上传首次 init 时使用的幂等键；会话丢失后凭它命中已建包结果，避免二次扣费 */
+  k: string
+}
+
+function loadResumeStore(): Record<string, ResumeEntry> {
   try {
-    return JSON.parse(localStorage.getItem(RESUME_STORE_KEY) || '{}')
+    const raw: Record<string, unknown> = JSON.parse(localStorage.getItem(RESUME_STORE_KEY) || '{}')
+    const out: Record<string, ResumeEntry> = {}
+    for (const [h, v] of Object.entries(raw)) {
+      if (typeof v === 'string') {
+        out[h] = { s: v, k: '' } // 兼容旧版本仅存 sessionId 的记录
+      } else if (v && typeof v === 'object' && 's' in v) {
+        const e = v as { s?: unknown; k?: unknown }
+        if (typeof e.s === 'string') out[h] = { s: e.s, k: typeof e.k === 'string' ? e.k : '' }
+      }
+    }
+    return out
   } catch {
     return {}
   }
 }
 
-function saveResumeStore(map: Record<string, string>) {
+function saveResumeStore(map: Record<string, ResumeEntry>) {
   localStorage.setItem(RESUME_STORE_KEY, JSON.stringify(map))
 }
 
@@ -112,7 +129,7 @@ async function fileHash(file: File): Promise<string> {
 }
 
 /** 本批文件的确定性幂等键：由全部文件 SHA-256 派生（排序后与选择顺序无关）。
- *  断网/超时重传时同一批文件必须生成同一个键，服务端才能命中已建包结果、避免二次扣费。 */
+ *  仅作兜底：旧版本本地记录未保存首次使用的随机键时，用它尽量对齐重传。 */
 async function idempotencyKey(hashes: string[]): Promise<string> {
   const material = hashes.slice().sort().join('|')
   const subtle = globalThis.crypto?.subtle
@@ -157,18 +174,46 @@ export async function uploadPackagesChunked(
     hash: hashes[i],
     chunk_size: CHUNK_SIZE,
   }))
-  // hash → 本地 File/meta：init 返回的会话下标在续传追加后与本地数组顺序未必一致，
-  // 且一批中可能存在不同目录同名文件，按 filename 反查会串文件，统一按指纹对齐
-  const fileByHash = new Map(hashes.map((h, i) => [h, files[i]]))
-  const metaByHash = new Map(hashes.map((h, i) => [h, metas[i]]))
+  // (hash, 文件名) 多重集 → 本地 File/meta：与服务端续传对齐口径一致。
+  // 一批中允许"同内容不同名"与"同内容同名副本"，单纯按 hash 建 Map 会坍缩，
+  // 导致其中一份拿到空的 uploaded 列表、缺片无法自愈
   const total = files.reduce((s, f) => s + f.size, 0)
+  const localByKey = new Map<string, { file: File; meta: (typeof metas)[number] }[]>()
+  for (let i = 0; i < files.length; i++) {
+    const key = `${hashes[i]} ${files[i].name}`
+    const arr = localByKey.get(key)
+    if (arr) arr.push({ file: files[i], meta: metas[i] })
+    else localByKey.set(key, [{ file: files[i], meta: metas[i] }])
+  }
+  const seenByKey = new Map<string, number>()
+  // 取服务端 entry（hash+filename）对应的第 nth 个本地文件，与服务端多重集对齐一致
+  const pickLocal = (hash: string, filename: string) => {
+    const key = `${hash} ${filename}`
+    const arr = localByKey.get(key)
+    const nth = seenByKey.get(key) ?? 0
+    if (!arr || nth >= arr.length) return undefined
+    seenByKey.set(key, nth + 1)
+    return arr[nth]
+  }
 
   // 仅当本批所有文件指向同一个未删会话时才续传
   const store = loadResumeStore()
-  const sessionIds = new Set(hashes.map((h) => store[h]).filter(Boolean))
+  const entries = hashes.map((h) => store[h]).filter((e): e is ResumeEntry => !!e)
+  const sessionIds = new Set(entries.map((e) => e.s))
   const resumeSession = sessionIds.size === 1 ? [...sessionIds][0] : undefined
-  // 无论是否续传都带确定性幂等键：complete 超时后重建会话时仍能命中已建包结果
-  const idemKey = await idempotencyKey(hashes)
+  // 幂等键策略（服务端把键绑定在会话上，重传命中靠"同键"）：
+  // - 全新上传：每次随机键。软删发票后重传同内容文件不会被 24h 结果缓存拒绝；
+  // - 续传：复用首次 init 的键（会话被服务端清理重建时仍能命中已建包结果）；
+  //   旧版本记录缺键时才退回内容派生的确定性键
+  let idemKey: string
+  if (resumeSession) {
+    const knownKeys = new Set(
+      entries.filter((e) => e.s === resumeSession && e.k).map((e) => e.k),
+    )
+    idemKey = knownKeys.size === 1 ? [...knownKeys][0] : await idempotencyKey(hashes)
+  } else {
+    idemKey = uuid()
+  }
 
   const initData = await request.post<any, { session_id: string; files: InitFileEntry[] }>(
     '/packages/chunked/init',
@@ -177,16 +222,19 @@ export async function uploadPackagesChunked(
   const sessionId = initData.session_id
   const newStore = loadResumeStore()
   hashes.forEach((h) => {
-    newStore[h] = sessionId
+    newStore[h] = { s: sessionId, k: idemKey }
   })
   saveResumeStore(newStore)
 
+  // 服务端条目与本地文件按 (hash,filename) 多重集对齐一次，两个循环共用结果
+  const aligned = initData.files.map((entry) => ({ entry, local: pickLocal(entry.hash, entry.filename) }))
+
   // 已上传字节数（续传时跳过的分片）
   let loaded = 0
-  for (const entry of initData.files) {
+  for (const { entry, local } of aligned) {
     loaded += entry.uploaded.length * CHUNK_SIZE
     // 最后一片按实际大小修正，避免进度超过 100%
-    const meta = metaByHash.get(entry.hash)
+    const meta = local?.meta
     if (meta && entry.uploaded.includes(Math.ceil(meta.size / CHUNK_SIZE) - 1)) {
       const remainder = meta.size % CHUNK_SIZE || CHUNK_SIZE
       loaded += remainder - CHUNK_SIZE
@@ -194,8 +242,8 @@ export async function uploadPackagesChunked(
   }
   onProgress?.({ loaded, total, percent: Math.round((loaded / total) * 1000) / 10 })
 
-  for (const entry of initData.files) {
-    const file = fileByHash.get(entry.hash)
+  for (const { entry, local } of aligned) {
+    const file = local?.file
     if (!file) continue
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
     const done = new Set(entry.uploaded)

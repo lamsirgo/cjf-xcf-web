@@ -444,6 +444,12 @@ async function checkGate(): Promise<void> {
     gateFailure.value = failure
     // 便于现场排查：把接口/状态/原始信息打到控制台（不含票面数据）
     console.warn('[print] 启动校验失败', { kind: failure.kind, status: failure.status, detail: failure.detail })
+    // 只有真正的网络离线才允许走宽限；平台明确拒绝（auth/server/接口版本过旧）
+    // 一律硬挡，不得借离线宽限绕过停用/服务端拒绝（MD §8.1 关闭应用=强制失效）
+    if (failure.kind !== 'offline') {
+      gateReason.value = 'need-online'
+      return
+    }
     const state = readGateState()
     const result = evaluateGate({
       validationOk: false,
