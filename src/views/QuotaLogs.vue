@@ -3,7 +3,14 @@
     <van-nav-bar title="额度流水" left-arrow @click-left="$router.back()" />
 
     <van-pull-refresh v-model="refreshing" @refresh="onRefresh">
-      <van-list v-model:loading="loading" :finished="finished" finished-text="没有更多了" @load="onLoad">
+      <van-list
+        v-model:loading="loading"
+        v-model:error="error"
+        :finished="finished"
+        finished-text="没有更多了"
+        error-text="加载失败，点击重试"
+        @load="onLoad"
+      >
         <div v-for="r in list" :key="r.id" class="log-card">
           <div class="log-top">
             <span class="log-type">
@@ -35,6 +42,7 @@ const list = ref<QuotaLogItem[]>([])
 const loading = ref(false)
 const finished = ref(false)
 const refreshing = ref(false)
+const error = ref(false)
 const page = ref(1)
 const PAGE_SIZE = 20
 
@@ -44,19 +52,23 @@ async function onLoad() {
     list.value.push(...data.list)
     loading.value = false
     refreshing.value = false
+    error.value = false
     if (list.value.length >= data.total) {
       finished.value = true
     } else {
       page.value += 1
     }
   } catch {
+    // 失败时终止 loading 并置 error（van-list 展示"点击重试"），否则会一直重试
     loading.value = false
     refreshing.value = false
+    error.value = true
   }
 }
 
 function onRefresh() {
   finished.value = false
+  error.value = false
   page.value = 1
   list.value = []
   loading.value = true

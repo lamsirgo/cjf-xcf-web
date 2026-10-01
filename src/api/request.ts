@@ -44,6 +44,10 @@ async function tryRefreshToken(): Promise<boolean> {
         const body = await resp.json()
         if (body.code === 0) {
           localStorage.setItem('access_token', body.data.access_token)
+          // refresh 令牌轮换：服务端每次刷新都作废旧 refresh 并下发新令牌
+          if (body.data.refresh_token) {
+            localStorage.setItem('refresh_token', body.data.refresh_token)
+          }
           return true
         }
       } catch {

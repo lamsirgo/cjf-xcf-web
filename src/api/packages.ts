@@ -93,6 +93,21 @@ async function fileHash(file: File): Promise<string> {
   return Math.abs(h).toString(16).padStart(64, '0')
 }
 
+/** 本批文件的确定性幂等键：由全部文件 SHA-256 派生（排序后与选择顺序无关）。
+ *  断网/超时重传时同一批文件必须生成同一个键，服务端才能命中已建包结果、避免二次扣费。 */
+async function idempotencyKey(hashes: string[]): Promise<string> {
+  const material = hashes.slice().sort().join('|')
+  const subtle = globalThis.crypto?.subtle
+  if (subtle) {
+    const buf = await subtle.digest('SHA-256', new TextEncoder().encode(material))
+    return Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('')
+  }
+  // 非安全上下文无 subtle（与 fileHash 弱指纹分支一致的兜底）
+  let h = 0
+  for (let i = 0; i < material.length; i++) h = (h * 31 + material.charCodeAt(i)) | 0
+  return Math.abs(h).toString(16).padStart(64, '0')
+}
+
 function postChunk(
   sessionId: string,
   index: number,
@@ -132,7 +147,8 @@ export async function uploadPackagesChunked(
   const store = loadResumeStore()
   const sessionIds = new Set(hashes.map((h) => store[h]).filter(Boolean))
   const resumeSession = sessionIds.size === 1 ? [...sessionIds][0] : undefined
-  const idemKey = resumeSession ? undefined : uuid()
+  // 无论是否续传都带确定性幂等键：complete 超时后重建会话时仍能命中已建包结果
+  const idemKey = await idempotencyKey(hashes)
 
   const initData = await request.post<any, { session_id: string; files: InitFileEntry[] }>(
     '/packages/chunked/init',
@@ -183,9 +199,12 @@ export async function uploadPackagesChunked(
     }
   }
 
+  // complete 在服务端要合并分片+解压+建包，100MB 包处理可能超过全局 60s 超时，放宽到 300s
+  // 超时不代表失败：服务端仍可能已建包，重传会凭确定性幂等键命中结果，不会二次扣费
   const res = await request.post<any, { package_id: number; total_files: number }>(
     '/packages/chunked/complete',
     { session_id: sessionId },
+    { timeout: 300000 },
   )
   dropResume(hashes)
   return res

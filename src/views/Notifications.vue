@@ -31,7 +31,7 @@
 </template>
 
 <script setup lang="ts">
-import { onActivated, ref, computed } from 'vue'
+import { onMounted, ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { listNotifications, readAllNotifications, type NotificationItem } from '@/api/notifications'
 import { onNotifyEvent } from '@/composables/notification-sse'
@@ -98,7 +98,8 @@ async function onDownloadExport(n: NotificationItem) {
   }
 }
 
-onActivated(load)
+// /notifications 为顶层路由，不在 Home 的 keep-alive 内，onActivated 不会触发，必须用 onMounted
+onMounted(load)
 
 // SSE：新通知实时插到列表顶部（去重，避免与全量加载重复）
 onNotifyEvent((event) => {
