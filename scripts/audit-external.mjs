@@ -1,0 +1,94 @@
+#!/usr/bin/env node
+/**
+ * 构建期「扫码审计」（G05）：确认产物里没有会真正发起请求的外部域。
+ *
+ * 用法：node scripts/audit-external.mjs [distDir]
+ *
+ * 三类判定：
+ * - allow：库内部字符串，不产生网络请求（XML/SVG 命名空间、警告链接、正则测试串）；
+ * - warn ：zxing-wasm 内置的默认 CDN 字符串常量（运行期已被 locateFile 覆盖为同源 wasm，
+ *          并且 CSP connect-src 'self' 会直接阻断），打印提醒但不失败；
+ * - deny ：其它任何外部 host —— 直接失败，防止「票据不上传」被悄悄破坏。
+ */
+
+import { readdirSync, readFileSync, statSync } from 'node:fs'
+import path from 'node:path'
+
+const distDir = path.resolve(process.argv[2] ?? 'dist')
+
+/** 不发起请求的既有字符串（库/框架内部） */
+const ALLOW = new Set([
+  'www.w3.org', // XML / SVG 命名空间
+  'vuejs.org', // Vue 警告文档链接
+  'github.com', // 依赖库注释里的仓库地址
+  'example.com',
+  'foo.bar',
+  'localhost', // 库内正则/测试串
+  'www.apache.org', // pdf.js 许可证头注释
+  'www.xfa.org', // XFA 规范命名空间
+  'ns.adobe.com', // XMP / XFA 命名空间
+])
+
+/** 已知且已缓解的外部字符串（仅提示） */
+const WARN = new Set([
+  'fastly.jsdelivr.net', // zxing-wasm 默认 locateFile，运行期被覆盖为同源 wasm
+])
+
+const URL_RE = /https?:\/\/([a-zA-Z0-9._-]+)/g
+const TEXT_EXT = new Set(['.js', '.mjs', '.cjs', '.html', '.css', '.webmanifest', '.json'])
+
+function walk(dir) {
+  const out = []
+  for (const entry of readdirSync(dir)) {
+    const full = path.join(dir, entry)
+    const st = statSync(full)
+    if (st.isDirectory()) out.push(...walk(full))
+    else if (TEXT_EXT.has(path.extname(entry))) out.push(full)
+  }
+  return out
+}
+
+let denyHits = 0
+let warnHits = 0
+const files = walk(distDir)
+for (const file of files) {
+  const text = readFileSync(file, 'utf8')
+  const hosts = new Map()
+  for (const m of text.matchAll(URL_RE)) {
+    const host = m[1].toLowerCase()
+    hosts.set(host, (hosts.get(host) ?? 0) + 1)
+  }
+  for (const [host, count] of hosts) {
+    const rel = path.relative(distDir, file)
+    if (ALLOW.has(host)) continue
+    if (WARN.has(host)) {
+      warnHits += 1
+      console.log(`  warn  ${rel}: ${host} ×${count}（库默认常量，运行期已覆盖；CSP connect-src 'self' 兜底）`)
+      continue
+    }
+    denyHits += 1
+    console.error(`  FAIL  ${rel}: 未白名单的外部域 ${host} ×${count}`)
+  }
+}
+
+// ② 动态求值审计：CSP 未开 'unsafe-eval'，产物里不允许出现 eval / new Function
+const EVAL_RE = /(^|[^.\w$])eval\s*\(|new\s+Function\s*\(/
+let evalHits = 0
+for (const file of files) {
+  if (!/\.(m?js)$/.test(file)) continue
+  const text = readFileSync(file, 'utf8')
+  if (EVAL_RE.test(text)) {
+    evalHits += 1
+    console.error(`  FAIL  ${path.relative(distDir, file)}: 命中动态求值（eval / new Function）`)
+  }
+}
+
+console.log(
+  `外部域审计：扫描 ${files.length} 个产物文件，禁止项 ${denyHits}，提醒项 ${warnHits}；动态求值命中 ${evalHits}`,
+)
+if (denyHits > 0 || evalHits > 0) {
+  console.error(
+    '审计未通过：存在会外发请求的外部域或动态求值，发布中止（如确需保留，请先修改脚本白名单并说明理由）。',
+  )
+  process.exit(1)
+}

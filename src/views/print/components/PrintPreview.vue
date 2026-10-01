@@ -1,6 +1,9 @@
 <template>
   <div ref="rootEl" class="preview">
-    <div class="pv-head">预览 · 共 {{ sheets.length }} 页</div>
+    <div class="pv-head">
+      预览 · 共 {{ sheets.length }} 页
+      <span v-if="sheets.length > 6" class="pv-tip">（仅绘制可视区域附近，滚动查看）</span>
+    </div>
     <div v-if="sheets.length === 0" class="pv-empty">添加票据后，在此预览排版效果</div>
     <div ref="scrollEl" class="pv-scroll">
       <div
@@ -10,7 +13,7 @@
         :class="{ active: i === currentIndex }"
         :style="{
           width: `${cssWidth}px`,
-          height: `${(cssWidth * sheet.height) / sheet.width}px`,
+          height: `${cssHeight(sheet)}px`,
         }"
       >
         <canvas></canvas>
@@ -22,7 +25,7 @@
 
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { buildSheetDecor } from '@/lib/print/decor'
+import { buildSheetDecor, type DecorItem } from '@/lib/print/decor'
 import type { DecoratorSpec, SheetLayout, SourceFile } from '@/lib/print/types'
 
 const props = defineProps<{
@@ -37,34 +40,10 @@ const scrollEl = ref<HTMLElement | null>(null)
 const currentIndex = ref(0)
 const cssWidth = ref(320)
 
-/** 视口前后各渲染多少页，其余 canvas 回收显存 */
+/** 视口前后各渲染多少页，其余 canvas 释放显存（虚拟化真实生效：root=视口） */
 const RENDER_MARGIN = 2
-
-/** pageId → 缩略图 URL */
-function thumbOf(pageId: string): string | undefined {
-  for (const f of props.files) {
-    const hit = f.pages.find((p) => p.id === pageId)
-    if (hit) return hit.thumbUrl
-  }
-  return undefined
-}
-
-const imageCache = new Map<string, HTMLImageElement>()
-function getImage(pageId: string): Promise<HTMLImageElement | null> {
-  const cached = imageCache.get(pageId)
-  if (cached) return Promise.resolve(cached)
-  const url = thumbOf(pageId)
-  if (!url) return Promise.resolve(null)
-  return new Promise((resolve) => {
-    const img = new Image()
-    img.onload = () => {
-      imageCache.set(pageId, img)
-      resolve(img)
-    }
-    img.onerror = () => resolve(null)
-    img.src = url
-  })
-}
+/** 缩略图解码缓存上限：超出按 LRU 释放，避免删除文件后位图常驻 */
+const IMAGE_CACHE_MAX = 24
 
 interface Slot {
   idx: number
@@ -78,14 +57,57 @@ let generation = 0
 let io: IntersectionObserver | null = null
 const visibleIdx = new Set<number>()
 
+/** pageId → 缩略图 URL（一次建表，避免每帧线性扫描全部票据） */
+const thumbMap = new Map<string, string>()
+function rebuildThumbMap() {
+  thumbMap.clear()
+  for (const f of props.files) for (const p of f.pages) thumbMap.set(p.id, p.thumbUrl)
+}
+
+const imageCache = new Map<string, HTMLImageElement>()
+function evictImageCache() {
+  while (imageCache.size > IMAGE_CACHE_MAX) {
+    const oldest = imageCache.keys().next().value as string | undefined
+    if (oldest === undefined) break
+    imageCache.delete(oldest)
+  }
+}
+
+function getImage(pageId: string): Promise<HTMLImageElement | null> {
+  const cached = imageCache.get(pageId)
+  if (cached) {
+    // 触活
+    imageCache.delete(pageId)
+    imageCache.set(pageId, cached)
+    return Promise.resolve(cached)
+  }
+  const url = thumbMap.get(pageId)
+  if (!url) return Promise.resolve(null)
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => {
+      imageCache.set(pageId, img)
+      evictImageCache()
+      resolve(img)
+    }
+    img.onerror = () => resolve(null)
+    img.src = url
+  })
+}
+
+function cssHeight(sheet: SheetLayout): number {
+  return sheet.width > 0 ? (cssWidth.value * sheet.height) / sheet.width : cssWidth.value
+}
+
 async function drawSlot(slot: Slot, gen: number) {
   const sheet = props.sheets[slot.idx]
   if (!sheet) return
   const w = cssWidth.value
-  const h = (w * sheet.height) / sheet.width
-  const dpr = Math.min(window.devicePixelRatio || 1, 2.5)
-  slot.canvas.width = Math.round(w * dpr)
-  slot.canvas.height = Math.round(h * dpr)
+  if (!(sheet.width > 0) || w <= 0) return
+  const h = cssHeight(sheet)
+  const dpr = Math.min(window.devicePixelRatio || 1, 2)
+  slot.canvas.width = Math.max(1, Math.round(w * dpr))
+  slot.canvas.height = Math.max(1, Math.round(h * dpr))
 
   const ctx = slot.canvas.getContext('2d')
   if (!ctx) return
@@ -95,41 +117,56 @@ async function drawSlot(slot: Slot, gen: number) {
 
   // pt → css px
   ctx.save()
-  ctx.scale(w / sheet.width, w / sheet.width)
+  try {
+    const scale = w / sheet.width
+    ctx.scale(scale, scale)
 
-  for (const p of sheet.placements) {
-    const img = await getImage(p.pageId)
-    if (gen !== generation) return // 已被新一次重绘取代
-    if (img) ctx.drawImage(img, p.x, p.y, p.width, p.height)
-  }
-
-  const items = buildSheetDecor(sheet, props.decorator)
-  ctx.strokeStyle = '#555555'
-  ctx.fillStyle = '#222222'
-  ctx.lineWidth = 0.55
-  ctx.lineCap = 'round'
-  ctx.font = '10px Helvetica, Arial, sans-serif'
-  ctx.textBaseline = 'alphabetic'
-  for (const it of items) {
-    if (it.kind === 'line') {
-      ctx.beginPath()
-      ctx.moveTo(it.x1, it.y1)
-      ctx.lineTo(it.x2, it.y2)
-      ctx.stroke()
-    } else if (it.kind === 'fill') {
-      ctx.fillStyle = '#ffffff'
-      ctx.fillRect(it.x, it.y, it.width, it.height)
-      ctx.fillStyle = '#222222'
-    } else {
-      ctx.fillText(it.text, it.x, it.y)
+    for (const p of sheet.placements) {
+      const img = await getImage(p.pageId)
+      if (gen !== generation) return // 已被新一次重绘取代
+      if (img) ctx.drawImage(img, p.x, p.y, p.width, p.height)
     }
+
+    const items = buildSheetDecor(sheet, props.decorator)
+    ctx.lineCap = 'butt'
+    ctx.textBaseline = 'alphabetic'
+    for (const it of items) {
+      drawItem(ctx, it)
+    }
+  } finally {
+    ctx.restore()
   }
-  ctx.restore()
   if (gen === generation) slot.drawn = true
+}
+
+function cssColor(c: readonly [number, number, number]): string {
+  const to = (v: number) => Math.round(Math.min(1, Math.max(0, v)) * 255)
+  return `rgb(${to(c[0])}, ${to(c[1])}, ${to(c[2])})`
+}
+
+function drawItem(ctx: CanvasRenderingContext2D, it: DecorItem) {
+  if (it.kind === 'line') {
+    ctx.strokeStyle = cssColor(it.color)
+    ctx.lineWidth = it.thickness
+    ctx.setLineDash(it.dash ?? [])
+    ctx.beginPath()
+    ctx.moveTo(it.x1, it.y1)
+    ctx.lineTo(it.x2, it.y2)
+    ctx.stroke()
+    ctx.setLineDash([])
+  } else if (it.kind === 'fill') {
+    ctx.fillStyle = cssColor(it.color)
+    ctx.fillRect(it.x, it.y, it.width, it.height)
+  } else {
+    ctx.fillStyle = cssColor(it.color)
+    ctx.font = `${it.size}px Helvetica, Arial, sans-serif`
+    ctx.fillText(it.text, it.x, it.y)
+  }
 }
 
 /** 回收画布显存 */
 function release(slot: Slot) {
+  if (slot.canvas.width === 2 && slot.canvas.height === 2 && !slot.drawn) return
   slot.canvas.width = 2
   slot.canvas.height = 2
   slot.drawn = false
@@ -138,15 +175,18 @@ function release(slot: Slot) {
 /** 依据当前可见页集合，绘制窗口内、回收窗口外 */
 function syncWindow() {
   const gen = generation
-  if (visibleIdx.size === 0) {
-    // 初始/无观测信息：只画第一屏
-    visibleIdx.add(0)
+  if (visibleIdx.size === 0 && slots.length > 0) {
+    if (props.sheets.length > 0) visibleIdx.add(0)
   }
   let lo = Infinity
   let hi = -Infinity
   for (const i of visibleIdx) {
     lo = Math.min(lo, i)
     hi = Math.max(hi, i)
+  }
+  if (!Number.isFinite(lo)) {
+    lo = 0
+    hi = Math.min(props.sheets.length - 1, RENDER_MARGIN * 2)
   }
   lo = Math.max(0, lo - RENDER_MARGIN)
   hi = Math.min(props.sheets.length - 1, hi + RENDER_MARGIN)
@@ -164,7 +204,12 @@ async function rebuild() {
   if (!root) return
 
   generation += 1
+  rebuildThumbMap()
   const els = Array.from(root.querySelectorAll<HTMLElement>('.pv-sheet'))
+  // 页面数量变化时释放不再使用的画布
+  for (const old of slots) {
+    if (old.idx >= els.length) release(old)
+  }
   slots = els.map((el, idx) => ({
     idx,
     el,
@@ -174,6 +219,8 @@ async function rebuild() {
   visibleIdx.clear()
 
   io?.disconnect()
+  // root: null = 以浏览器视口为根，随页面滚动真实生效（此前误用不可滚动容器做 root，
+  // 导致所有页都被判定为可见，虚拟化失效、显存随页数线性增长）
   io = new IntersectionObserver(
     (entries) => {
       let changed = false
@@ -196,7 +243,7 @@ async function rebuild() {
       }
       if (changed) syncWindow()
     },
-    { root, threshold: [0, 0.45] },
+    { threshold: [0, 0.45] },
   )
   for (const slot of slots) io.observe(slot.el)
 
@@ -214,16 +261,21 @@ async function rebuild() {
 
 function measure() {
   if (rootEl.value) {
-    cssWidth.value = Math.min(420, rootEl.value.clientWidth)
+    cssWidth.value = Math.max(120, Math.min(420, rootEl.value.clientWidth))
   }
 }
 
 let ro: ResizeObserver | null = null
+let measureTimer: number | undefined
+
 onMounted(() => {
   measure()
   ro = new ResizeObserver(() => {
-    measure()
-    void rebuild()
+    window.clearTimeout(measureTimer)
+    measureTimer = window.setTimeout(() => {
+      measure()
+      void rebuild()
+    }, 120)
   })
   if (rootEl.value) ro.observe(rootEl.value)
   void rebuild()
@@ -232,10 +284,14 @@ onMounted(() => {
 onBeforeUnmount(() => {
   io?.disconnect()
   ro?.disconnect()
+  window.clearTimeout(measureTimer)
+  imageCache.clear()
+  for (const slot of slots) release(slot)
+  slots = []
 })
 
 watch(
-  () => [props.sheets, props.decorator],
+  () => [props.sheets, props.decorator, props.files],
   () => void rebuild(),
   { deep: true },
 )
@@ -250,6 +306,11 @@ watch(
   font-weight: 500;
   color: var(--van-text-color, #323233);
   margin-bottom: 10px;
+}
+.pv-tip {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--van-text-color-3, #969799);
 }
 .pv-empty {
   padding: 36px 12px;

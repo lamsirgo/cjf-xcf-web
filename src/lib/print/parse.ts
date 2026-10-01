@@ -1,112 +1,141 @@
 /**
- * 票据导入解码（浏览器运行时）。
+ * 票据导入解码（主线程侧适配层）。
  *
- * - PDF：pdfjs 逐页拆为独立票据项，保留原始字节（导出时矢量嵌入）；
- * - 图片：PNG / JPG，按 96dpi 换算 pt，保留原始字节（导出时图片嵌入）；
- * - 缩略图统一输出 dataURL，由 GC 回收，无需手动 revoke。
+ * 真正的解析（PDF 逐页渲染 + 缩略图）在 print-parse.worker 内完成，
+ * 主线程只负责：建 Worker、把 File 句柄递过去、把回传的缩略图 Blob 变成 objectURL。
+ *
+ * 内存约定：
+ * - 文件字节由 Worker 读取后 **转移** 回主线程（SourceFile.buffer）；
+ * - 缩略图为 blob: URL，移除文件/清空时必须 revokeObjectURL（见 useFileSet）。
  */
 
-import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist'
-import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+import * as Comlink from 'comlink'
 import type { SourceFile, TicketPage } from './types'
-
-GlobalWorkerOptions.workerSrc = workerUrl as string
+import type { ParseWorkerApi } from '@/workers/print-parse.worker'
 
 export const SUPPORTED_EXTS = ['pdf', 'png', 'jpg', 'jpeg']
 
-const THUMB_WIDTH = 400
-const PX_TO_PT = 72 / 96
-
-function genId(): string {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
-  return `f_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+export interface ParsedPagePayload extends Omit<TicketPage, 'thumbUrl'> {
+  thumb: Blob
 }
 
-function makeThumbCanvas(srcW: number, srcH: number): HTMLCanvasElement {
-  const w = Math.min(THUMB_WIDTH, Math.max(1, Math.round(srcW)))
-  const h = Math.max(1, Math.round((srcH * w) / srcW))
-  const canvas = document.createElement('canvas')
-  canvas.width = w
-  canvas.height = h
-  return canvas
+export interface ParsedFilePayload {
+  id: string
+  name: string
+  ext: string
+  size: number
+  buffer: ArrayBuffer
+  pages: ParsedPagePayload[]
 }
 
-async function decodePdf(id: string, fileName: string, buffer: ArrayBuffer): Promise<TicketPage[]> {
-  // 传副本：pdfjs 会接管传入数据，原始 buffer 必须保留给导出时矢量嵌入
-  const task = getDocument({ data: new Uint8Array(buffer.slice(0)) })
-  const pdf = await task.promise
-  const pages: TicketPage[] = []
+let worker: Worker | null = null
+let workerApi: Comlink.Remote<ParseWorkerApi> | null = null
+let workerBroken = false
 
+function resetWorker() {
   try {
-    for (let i = 0; i < pdf.numPages; i++) {
-      const page = await pdf.getPage(i + 1)
-      const baseViewport = page.getViewport({ scale: 1 })
-      const thumbScale = THUMB_WIDTH / baseViewport.width
+    worker?.terminate()
+  } catch {
+    /* ignore */
+  }
+  worker = null
+  workerApi = null
+  workerBroken = false
+}
 
-      const canvas = makeThumbCanvas(baseViewport.width, baseViewport.height)
-      await page.render({
-        canvas,
-        viewport: page.getViewport({ scale: thumbScale }),
-      }).promise
-
-      const suffix = pdf.numPages > 1 ? ` 第${i + 1}页` : ''
-      pages.push({
-        id: `${id}:${i}`,
-        fileId: id,
-        sourcePage: i,
-        name: `${fileName}${suffix}`,
-        widthPt: baseViewport.width,
-        heightPt: baseViewport.height,
-        thumbUrl: canvas.toDataURL('image/jpeg', 0.72),
-      })
+function ensureWorker(): Comlink.Remote<ParseWorkerApi> {
+  if (!workerApi) {
+    const w = new Worker(new URL('@/workers/print-parse.worker.ts', import.meta.url), {
+      type: 'module',
+    })
+    w.onerror = () => {
+      workerBroken = true
+      resetWorker()
     }
-  } finally {
-    await task.destroy()
+    w.onmessageerror = () => {
+      workerBroken = true
+      resetWorker()
+    }
+    worker = w
+    workerApi = Comlink.wrap<ParseWorkerApi>(w)
   }
-  return pages
+  return workerApi
 }
 
-async function decodeImage(id: string, fileName: string, buffer: ArrayBuffer): Promise<TicketPage[]> {
-  const blob = new Blob([buffer])
-  const bitmap = await createImageBitmap(blob)
-  try {
-    const canvas = makeThumbCanvas(bitmap.width, bitmap.height)
-    const ctx = canvas.getContext('2d')
-    if (!ctx) throw new Error('无法创建画布')
-    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
-    return [
-      {
-        id: `${id}:0`,
-        fileId: id,
-        sourcePage: 0,
-        name: fileName,
-        widthPt: bitmap.width * PX_TO_PT,
-        heightPt: bitmap.height * PX_TO_PT,
-        thumbUrl: canvas.toDataURL('image/jpeg', 0.72),
-      },
-    ]
-  } finally {
-    bitmap.close()
-  }
-}
+/** 单个文件的解析超时（大 PDF 也远小于此值） */
+const PARSE_TIMEOUT_MS = 5 * 60 * 1000
 
-export async function parseFile(file: File): Promise<SourceFile> {
+/**
+ * 解析一个票据文件（PDF / PNG / JPG）。
+ * @param forcedId 草稿恢复时复用原文件 id
+ */
+export async function parseFile(file: File, forcedId?: string): Promise<SourceFile> {
   const ext = (file.name.split('.').pop() ?? '').toLowerCase()
   if (!SUPPORTED_EXTS.includes(ext)) {
     throw new Error(`不支持的文件类型：${file.name}（仅支持 PDF / PNG / JPG）`)
   }
+  if (file.size === 0) {
+    throw new Error(`文件为空：${file.name}`)
+  }
 
-  const id = genId()
-  const buffer = await file.arrayBuffer()
-  const displayName = file.name.replace(/\.[^.]+$/, '')
-  const pages = ext === 'pdf' ? await decodePdf(id, displayName, buffer) : await decodeImage(id, displayName, buffer)
+  const api = ensureWorker()
+  const created: string[] = []
+  try {
+    const parsed = await new Promise<ParsedFilePayload>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        workerBroken = true
+        resetWorker()
+        reject(new Error(`解析超时：${file.name}`))
+      }, PARSE_TIMEOUT_MS)
+      api.parse(file, forcedId).then(
+        (v) => {
+          clearTimeout(timer)
+          resolve(v)
+        },
+        (err) => {
+          clearTimeout(timer)
+          if (workerBroken) resetWorker()
+          reject(new Error(`解析失败：${file.name}（${(err as Error).message || '文件可能已损坏或加密'}）`))
+        },
+      )
+    })
 
-  return {
-    id,
-    name: file.name,
-    ext,
-    size: file.size,
-    buffer,
-    pages,
+    const pages: TicketPage[] = parsed.pages.map((p) => {
+      const url = URL.createObjectURL(p.thumb)
+      created.push(url)
+      return {
+        id: p.id,
+        fileId: p.fileId,
+        sourcePage: p.sourcePage,
+        name: p.name,
+        widthPt: p.widthPt,
+        heightPt: p.heightPt,
+        thumbUrl: url,
+      }
+    })
+
+    if (pages.length === 0) {
+      throw new Error(`文件中没有可用页面：${file.name}`)
+    }
+
+    return {
+      id: parsed.id,
+      name: parsed.name,
+      ext: parsed.ext,
+      size: parsed.size,
+      buffer: parsed.buffer,
+      pages,
+    }
+  } catch (err) {
+    // 失败时回收已创建的 objectURL，避免泄漏
+    created.forEach((u) => URL.revokeObjectURL(u))
+    throw err
+  }
+}
+
+/** 释放一个票据文件的缩略图 URL */
+export function releaseFileThumbs(file: Pick<SourceFile, 'pages'>) {
+  for (const p of file.pages) {
+    if (p.thumbUrl.startsWith('blob:')) URL.revokeObjectURL(p.thumbUrl)
   }
 }

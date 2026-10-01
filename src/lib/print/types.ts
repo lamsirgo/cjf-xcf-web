@@ -50,6 +50,12 @@ export interface LayoutSpec {
   offsetYMm: number
 }
 
+/** 扫描 Worker 字节缓存被淘汰的信号（主线程与 Worker 共用，避免主线程 import worker 模块） */
+export const SCAN_BUFFER_MISSING = 'SCAN_BUFFER_MISSING'
+
+/** RGB（各分量 0~1，内核不依赖任何渲染库） */
+export type RGB = readonly [number, number, number]
+
 /** 装饰规格 */
 export interface DecoratorSpec {
   /** 是否添加序号角标 */
@@ -58,6 +64,49 @@ export interface DecoratorSpec {
   divider: DividerStyle
   /** 同票双联：一张纸上下各打印一份，便于中间裁开 */
   duplex: boolean
+  /** 序号字号（pt）。排版会据此预留票面外的序号带，绝不覆盖票面 */
+  numberFontPt: number
+  /** 标记颜色（序号文字 / 裁切线） */
+  markColor: RGB
+  /** 虚线段长（pt） */
+  dashLen: number
+  /** 虚线间隔（pt） */
+  dashGap: number
+}
+
+export const DEFAULT_DECORATOR: DecoratorSpec = {
+  numbering: false,
+  divider: 'dashed',
+  duplex: false,
+  numberFontPt: 10,
+  markColor: [0.13, 0.13, 0.13],
+  dashLen: 3.2,
+  dashGap: 2.6,
+}
+
+/**
+ * 序号带宽度（pt）：开了序号就必须在票面外留出的空白带高度/宽度。
+ * 由字号推导，作为 LayoutEngine 与 Decorator 之间的约定。
+ */
+export function numberBandPt(spec: Pick<DecoratorSpec, 'numbering' | 'numberFontPt'>): number {
+  if (!spec.numbering) return 0
+  const font = Number.isFinite(spec.numberFontPt) ? spec.numberFontPt : 10
+  return Math.min(30, Math.max(8, font + 4))
+}
+
+/**
+ * 取纸张物理尺寸（竖版基准）。未知规格回退 A4，避免脏配置直接抛错。
+ */
+export function paperSize(spec: Pick<LayoutSpec, 'paper' | 'customWidthMm' | 'customHeightMm'>): PaperSize {
+  if (spec.paper === 'custom') {
+    const w = Number.isFinite(spec.customWidthMm) ? spec.customWidthMm : 210
+    const h = Number.isFinite(spec.customHeightMm) ? spec.customHeightMm : 297
+    return {
+      widthMm: Math.min(500, Math.max(50, w)),
+      heightMm: Math.min(700, Math.max(50, h)),
+    }
+  }
+  return PAPER_SIZES[spec.paper as Exclude<PaperKind, 'custom'>] ?? PAPER_SIZES.A4
 }
 
 /**
@@ -100,7 +149,7 @@ export interface TicketPage {
   /** 原始页面尺寸（pt） */
   widthPt: number
   heightPt: number
-  /** 预览缩略图（dataURL，可直接 GC，无需 revoke） */
+  /** 预览缩略图 URL（blob:，移除文件/清空时必须 URL.revokeObjectURL） */
   thumbUrl: string
 }
 

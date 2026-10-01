@@ -11,10 +11,11 @@
     <!-- 扫描中 -->
     <template v-else-if="scanning">
       <div class="sc-scan-label">
-        正在扫描二维码 {{ progress.done }} / {{ progress.total }}
+        <template v-if="phase === 'engine'">正在准备识别引擎（首次加载约需数秒）…</template>
+        <template v-else>正在扫描二维码 {{ progress.done }} / {{ progress.total }}</template>
       </div>
       <van-progress
-        :percentage="percentage"
+        :percentage="phase === 'engine' ? 0 : percentage"
         stroke-width="6"
         :show-pivot="false"
       />
@@ -57,10 +58,24 @@
         <van-icon name="arrow" />
       </div>
 
+      <!-- 失败原因显式呈现（不静默失败） -->
+      <div v-if="failures.length > 0" class="sc-fail-tip">
+        <van-icon name="warning-o" />
+        <div class="sft-body">
+          <div>{{ failures.length }} 张票据识别失败（已保留其它结果，可重试或人工补录）</div>
+          <div v-for="f in failurePreview" :key="f.pageId" class="sft-item">
+            · {{ f.name }}：{{ f.reason }}
+          </div>
+          <div v-if="failures.length > failurePreview.length" class="sft-item">
+            · 另有 {{ failures.length - failurePreview.length }} 张…
+          </div>
+        </div>
+      </div>
+
       <div class="sc-ops">
         <span @click="emit('copy')"><van-icon name="orders-o" />复制结果</span>
         <span @click="emit('csv')"><van-icon name="down" />导出 CSV</span>
-        <span @click="emit('dup')"><van-icon name="eye-o" />重复详情</span>
+        <span v-if="dedupEnabled" @click="emit('dup')"><van-icon name="eye-o" />重复详情</span>
         <span @click="emit('manual')">
           <van-icon name="edit" />人工补录<em v-if="stats.partial + stats.unknown > 0">({{ stats.partial + stats.unknown }})</em>
         </span>
@@ -73,13 +88,17 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { InvoiceStats } from '@/lib/print/qr'
+import type { ScanFailure, ScanPhase } from '@/composables/print/useQrScan'
 import { fmtMoney } from '@/composables/print/useInvoiceStats'
 
 const props = defineProps<{
   scanning: boolean
+  phase: ScanPhase
   progress: { done: number; total: number }
   hasScanned: boolean
   stats: InvoiceStats
+  failures: ScanFailure[]
+  dedupEnabled: boolean
 }>()
 
 const emit = defineEmits<{
@@ -96,6 +115,9 @@ const percentage = computed(() =>
     ? Math.round((props.progress.done / props.progress.total) * 100)
     : 0,
 )
+
+/** 失败详情最多展示 3 条，其余折叠为计数 */
+const failurePreview = computed(() => props.failures.slice(0, 3))
 
 function fmt(n: number) {
   return fmtMoney(n)
@@ -192,6 +214,27 @@ function fmt(n: number) {
 }
 .sc-dup-tip span {
   flex: 1;
+}
+
+.sc-fail-tip {
+  margin-top: 12px;
+  padding: 9px 12px;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--van-warning-color, #ff976a);
+  background: var(--van-warning-background, #fff7e8);
+  border-radius: 8px;
+}
+.sft-body {
+  flex: 1;
+  min-width: 0;
+  word-break: break-all;
+}
+.sft-item {
+  color: var(--van-text-color-2, #646566);
 }
 
 .sc-ops {

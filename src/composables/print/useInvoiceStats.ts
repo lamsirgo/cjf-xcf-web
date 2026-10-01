@@ -30,8 +30,13 @@ export function fmtMoney(n: number): string {
   })
 }
 
-function csvCell(v: string | number | null): string {
-  const s = v === null || v === undefined ? '' : String(v)
+/**
+ * CSV 单元格：转义引号/逗号/换行，并中和公式注入（= + - @ 开头会被 Excel 当公式执行）。
+ * 文本型单元格一律加前导单引号，数字/金额不受影响。
+ */
+export function escapeCsvCell(v: string | number | null): string {
+  let s = v === null || v === undefined ? '' : String(v)
+  if (typeof v === 'string' && /^[=+\-@\t\r]/.test(s)) s = `'${s}`
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 
@@ -109,7 +114,7 @@ export function useInvoiceStats(
         resolved?.fileName ?? '',
       ]
     })
-    return [header, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n')
+    return [header, ...rows].map((r) => r.map(escapeCsvCell).join(',')).join('\r\n')
   }
 
   function exportCsv() {
