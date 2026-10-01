@@ -17,7 +17,14 @@
       <van-icon :name="gateIcon" class="dc-icon" />
       <div class="dc-title">{{ gateTitle }}</div>
       <div class="dc-cap">{{ gateCap }}</div>
-      <van-button size="small" plain type="primary" :loading="gateChecking" @click="checkGate">
+      <div v-if="gateDiagnostic" class="dc-diag">{{ gateDiagnostic }}</div>
+      <van-button
+        size="small"
+        plain
+        type="primary"
+        :loading="gateChecking"
+        @click="gateReason === 'update-required' ? reloadPage() : checkGate()"
+      >
         {{ gateReason === 'update-required' ? '刷新页面' : '重新检查' }}
       </van-button>
     </div>
@@ -260,7 +267,14 @@ import {
 } from 'vant'
 import { getPrintManifest, reportPrintUsage } from '@/api/print'
 import { BizError } from '@/api/request'
-import { CLIENT_VERSION, evaluateGate, type GateReason } from '@/lib/print/gate'
+import {
+  CLIENT_VERSION,
+  classifyGateFailure,
+  evaluateGate,
+  gateMessage,
+  type GateFailure,
+  type GateReason,
+} from '@/lib/print/gate'
 import type { PrintCapabilities, PrintManifest } from '@/api/print'
 import { clampOffsets, computeLayout } from '@/lib/print/layout'
 import {
@@ -308,7 +322,10 @@ const usagePages = ref(0)
 const dailyCap = ref(0)
 const usedToday = ref(0)
 const appVersion = ref('')
-const LAST_OK_KEY = 'print_gate_ok_at'
+/** 上次校验失败的具体原因（用于给出准确提示与诊断信息） */
+const gateFailure = ref<GateFailure | null>(null)
+/** 上次成功校验时间 + 平台下发的离线宽限期一起持久化（否则重载后宽限期退化为 0） */
+const GATE_STATE_KEY = 'print_gate_state'
 
 const gateTitle = computed(() => {
   if (gateReason.value === 'disabled') return '应用已停用'
@@ -322,16 +339,57 @@ const gateCap = computed(() => {
   if (gateReason.value === 'update-required') {
     return '当前版本已不受支持，请刷新页面以加载最新版本后再使用。'
   }
-  return '为保证应用状态有效，每次启动都需要联网校验成功（平台未配置离线宽限期）。请检查网络后重试；进入应用后断网仍可继续使用。'
+  // need-online：按真实失败原因给提示（接口不存在 / 接口报错 / 登录失效 / 断网）
+  return gateMessage(gateFailure.value ?? { kind: 'offline' }).cap
 })
-const gateIcon = computed(() =>
-  gateReason.value === 'disabled' ? 'lock' : gateReason.value === 'update-required' ? 'upgrade' : 'wifi-o',
-)
+const gateIcon = computed(() => {
+  if (gateReason.value === 'disabled') return 'lock'
+  if (gateReason.value === 'update-required') return 'upgrade'
+  const kind = gateFailure.value?.kind
+  if (kind === 'not-deployed' || kind === 'server') return 'warning-o'
+  if (kind === 'auth') return 'lock'
+  return 'wifi-o'
+})
+/** 诊断信息：页面上直接给出接口/状态码，避免运维盲查 */
+const gateDiagnostic = computed(() => {
+  const f = gateFailure.value
+  if (!f || gateReason.value !== 'need-online') return ''
+  const parts = [`接口：${window.location.origin}/api/v1/print/manifest`]
+  if (f.status) parts.push(`状态：${f.status}`)
+  if (f.detail) parts.push(`信息：${f.detail}`)
+  return parts.join(' · ')
+})
 
-function readLastOkAt(): number | null {
-  const raw = localStorage.getItem(LAST_OK_KEY)
-  const n = raw ? Number(raw) : NaN
-  return Number.isFinite(n) && n > 0 ? n : null
+interface GateState {
+  lastOkAt: number | null
+  graceMinutes: number
+}
+
+function readGateState(): GateState {
+  try {
+    const raw = localStorage.getItem(GATE_STATE_KEY)
+    if (!raw) return { lastOkAt: null, graceMinutes: 0 }
+    const parsed = JSON.parse(raw) as Partial<GateState>
+    const lastOkAt =
+      typeof parsed.lastOkAt === 'number' && Number.isFinite(parsed.lastOkAt) && parsed.lastOkAt > 0
+        ? parsed.lastOkAt
+        : null
+    const graceMinutes =
+      typeof parsed.graceMinutes === 'number' && Number.isFinite(parsed.graceMinutes) && parsed.graceMinutes >= 0
+        ? parsed.graceMinutes
+        : 0
+    return { lastOkAt, graceMinutes }
+  } catch {
+    return { lastOkAt: null, graceMinutes: 0 }
+  }
+}
+
+function writeGateState(next: GateState) {
+  try {
+    localStorage.setItem(GATE_STATE_KEY, JSON.stringify(next))
+  } catch {
+    /* 隐私模式等场景存不了，本次仍可继续 */
+  }
 }
 
 /** 启动/重试门禁：联网校验成功才允许进入（宽限期由平台下发） */
@@ -345,25 +403,27 @@ async function checkGate(): Promise<void> {
       return
     }
     lastGraceMinutes = Math.max(0, Number(m.offlineGraceMinutes ?? 0))
+    const state0 = readGateState()
     const result = evaluateGate({
       validationOk: true,
-      lastOkAt: readLastOkAt(),
+      lastOkAt: state0.lastOkAt,
       now: Date.now(),
-      graceMinutes: lastGraceMinutes,
+      graceMinutes: state0.graceMinutes,
       clientVersion: CLIENT_VERSION,
       minClientVersion: m.minClientVersion,
     })
     if (result.reason !== 'ok') {
       gateReason.value = result.reason
+      gateFailure.value = null
       return
     }
-    if (result.recordOk) {
-      try {
-        localStorage.setItem(LAST_OK_KEY, String(Date.now()))
-      } catch {
-        /* 存不了也不影响本次进入 */
-      }
-    }
+    // 成功校验：把「校验时间 + 平台下发的宽限期」一起持久化，
+    // 否则离线重载时读不到宽限期，platform 配的 grace 会退化为 0。
+    writeGateState({
+      lastOkAt: result.recordOk ? Date.now() : state0.lastOkAt,
+      graceMinutes: lastGraceMinutes,
+    })
+    gateFailure.value = null
     gateReason.value = 'ok'
     capabilities.value = { ...ALL_CAPS, ...(m.capabilities ?? {}) }
     // 未授权能力必须真正失效，而不是只隐藏入口（见下方 effectiveDecorator 的硬收口）
@@ -377,14 +437,19 @@ async function checkGate(): Promise<void> {
     if (err instanceof BizError && err.code === 1002) {
       // 平台明确拒绝：应用未开通/已停用 → 不进入应用
       gateReason.value = 'disabled'
+      gateFailure.value = null
       return
     }
-    // 网络/离线：按平台下发的宽限期判定（默认 0 → 必须联网校验）
+    const failure = classifyGateFailure(err)
+    gateFailure.value = failure
+    // 便于现场排查：把接口/状态/原始信息打到控制台（不含票面数据）
+    console.warn('[print] 启动校验失败', { kind: failure.kind, status: failure.status, detail: failure.detail })
+    const state = readGateState()
     const result = evaluateGate({
       validationOk: false,
-      lastOkAt: readLastOkAt(),
+      lastOkAt: state.lastOkAt,
       now: Date.now(),
-      graceMinutes: lastGraceMinutes,
+      graceMinutes: state.graceMinutes,
       clientVersion: CLIENT_VERSION,
       minClientVersion: null,
     })
@@ -399,7 +464,7 @@ async function checkGate(): Promise<void> {
   }
 }
 
-/** 最近一次 manifest 下发的离线宽限期（离线重试时沿用） */
+/** 最近一次 manifest 下发的离线宽限期（成功后写入 GATE_STATE_KEY，随校验时间一起持久化） */
 let lastGraceMinutes = 0
 
 const {
@@ -730,6 +795,10 @@ async function onDrop(e: DragEvent) {
   if (text) await importFromUrl(text.trim().split('\n')[0])
 }
 
+function reloadPage() {
+  window.location.reload()
+}
+
 function goBack() {
   if (window.history.length > 1) router.back()
   else void router.push('/workbench')
@@ -1022,6 +1091,16 @@ onUnmounted(() => {
   font-size: 16px;
   font-weight: 600;
   color: var(--van-text-color, #323233);
+}
+.dc-diag {
+  margin: 0 0 14px;
+  padding: 6px 8px;
+  font-size: 11px;
+  line-height: 1.6;
+  word-break: break-all;
+  color: var(--van-text-color-3, #969799);
+  background: var(--van-background, #f7f8fa);
+  border-radius: 6px;
 }
 .dc-cap {
   margin: 8px 0 16px;

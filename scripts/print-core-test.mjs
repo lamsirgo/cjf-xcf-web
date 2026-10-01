@@ -95,7 +95,7 @@ const { renderPdf, renderCalibrationPdf, ticketEmbedGeometry } = render
 const { sanitizeSettings, hexToRgb, LIMITS } = settings
 const { escapeCsvCell } = stats
 const { readImageInfo, needsOrientationFix, orientationMatrix, orientedSize } = imageinfo
-const { compareVersions, evaluateGate, CLIENT_VERSION } = gate
+const { compareVersions, evaluateGate, CLIENT_VERSION, classifyGateFailure, gateMessage } = gate
 
 const ticket = (i, w = 595, h = 842) => ({
   id: `p${i}`,
@@ -801,6 +801,53 @@ await check('evaluateGate：客户端版本低于最低要求必须先更新（�
     clientVersion: '0.0.1', minClientVersion: null,
   })
   assert.equal(noMin.reason, 'ok')
+})
+
+await check('classifyGateFailure：区分"接口未部署 / 接口报错 / 登录失效 / 断网"', () => {
+  // 后端旧进程：接口不存在 → 404
+  const notFound = classifyGateFailure({ response: { status: 404, data: { code: 404, msg: 'Not Found' } } })
+  assert.equal(notFound.kind, 'not-deployed')
+  assert.equal(notFound.status, 404)
+  // 迁移没跑 → 500
+  const server = classifyGateFailure({ response: { status: 500, data: { msg: '服务器内部错误' } } })
+  assert.equal(server.kind, 'server')
+  // 登录态失效：HTTP 401 与业务码 2005
+  assert.equal(classifyGateFailure({ response: { status: 401 } }).kind, 'auth')
+  assert.equal(classifyGateFailure({ code: 2005, message: '登录已失效' }).kind, 'auth')
+  // 真正的断网：无 response
+  assert.equal(classifyGateFailure(new Error('Network Error')).kind, 'offline')
+  assert.equal(classifyGateFailure({ code: 'ERR_NETWORK' }).kind, 'offline')
+  // 业务错误码（HTTP 200 + code!=0）
+  const biz = classifyGateFailure({ code: 1600, message: '操作过于频繁' })
+  assert.equal(biz.kind, 'server')
+  assert.equal(biz.status, 1600)
+})
+
+await check('gateMessage：提示必须指向真实原因（不得一律说"网络"）', () => {
+  const a = gateMessage({ kind: 'not-deployed', status: 404 })
+  assert.ok(/接口/.test(a.title + a.cap) && /未更新或未重启/.test(a.cap), JSON.stringify(a))
+  assert.ok(!/请检查网络/.test(a.cap), '接口未部署不应提示检查网络')
+  const b = gateMessage({ kind: 'server', status: 500, detail: '服务器内部错误' })
+  assert.ok(/迁移/.test(b.cap), '5xx 应提示可能未执行迁移')
+  const c = gateMessage({ kind: 'offline' })
+  assert.ok(/检查网络/.test(c.cap))
+  const d = gateMessage({ kind: 'auth', status: 401 })
+  assert.ok(/重新登录/.test(d.cap))
+})
+
+await check('平台配置的离线宽限期在重载后仍生效（需持久化 lastOkAt+grace）', () => {
+  // 模拟：平台下发 60 分钟宽限；已持久化 lastOkAt=1000，grace=60
+  const offlineNow = evaluateGate({
+    validationOk: false, lastOkAt: 1000, now: 1000 + 30 * 60_000, graceMinutes: 60,
+    clientVersion: CLIENT_VERSION,
+  })
+  assert.equal(offlineNow.reason, 'ok')
+  // 若 grace 未持久化（退化为 0）→ 同一场景会被拦，这正是修复前的缺陷
+  const graceLost = evaluateGate({
+    validationOk: false, lastOkAt: 1000, now: 1000 + 30 * 60_000, graceMinutes: 0,
+    clientVersion: CLIENT_VERSION,
+  })
+  assert.equal(graceLost.reason, 'need-online')
 })
 
 await check('fuzz evaluateGate：任意输入不抛错且结论合法', () => {

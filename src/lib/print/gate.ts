@@ -34,6 +34,81 @@ export interface GateResult {
   recordOk: boolean
 }
 
+/** 门禁校验失败的原因分类（用于给出准确提示，而不是一律说"请检查网络"） */
+export type GateFailureKind =
+  | 'offline' // 网络不可达/超时
+  | 'not-deployed' // 平台没有该接口（404/405）→ 后端未更新或未重启
+  | 'server' // 平台接口报错（5xx / 业务错误码）
+  | 'auth' // 登录态或权限问题
+  | 'unknown'
+
+export interface GateFailure {
+  kind: GateFailureKind
+  /** HTTP 状态码或业务码（有则展示，便于运维定位） */
+  status?: number
+  /** 平台返回的原始信息 */
+  detail?: string
+}
+
+/**
+ * 把启动校验的异常翻译成可诊断的原因。
+ *
+ * 背景：`/print/manifest` 是新增接口，若后端仍是旧进程会返回 404；
+ * 这跟"用户断网"完全不同，提示必须区分，否则运维会一直去查网络。
+ */
+export function classifyGateFailure(err: unknown): GateFailure {
+  const e = err as {
+    code?: number | string
+    message?: string
+    response?: { status?: number; data?: { code?: number; msg?: string } }
+  }
+  const detail = e?.response?.data?.msg || e?.message
+  const status = e?.response?.status
+  if (typeof status === 'number') {
+    if (status === 404 || status === 405) return { kind: 'not-deployed', status, detail }
+    if (status === 401 || status === 403) return { kind: 'auth', status, detail }
+    if (status >= 500) return { kind: 'server', status, detail }
+    return { kind: 'unknown', status, detail }
+  }
+  // 业务码（HTTP 200 + code!=0 时由 axios 拦截器转成 BizError）
+  if (typeof e?.code === 'number' && e.code !== 0) {
+    if (e.code === 2004 || e.code === 2005) return { kind: 'auth', status: e.code, detail }
+    return { kind: 'server', status: e.code, detail }
+  }
+  return { kind: 'offline', detail }
+}
+
+/** 门禁页面文案：不同原因给出不同指引 */
+export function gateMessage(failure: GateFailure): { title: string; cap: string } {
+  switch (failure.kind) {
+    case 'not-deployed':
+      return {
+        title: '平台接口版本过旧',
+        cap: `平台接口 /api/v1/print/manifest 不存在（HTTP ${failure.status ?? 404}），通常是后端未更新或未重启。请联系平台运维升级并重启服务后重试。`,
+      }
+    case 'server':
+      return {
+        title: '平台接口异常',
+        cap: `平台在校验应用状态时返回错误${failure.status ? `（${failure.status}）` : ''}${failure.detail ? `：${failure.detail}` : ''}。若刚升级过后端，请确认已执行数据库迁移（alembic upgrade head）。`,
+      }
+    case 'auth':
+      return {
+        title: '登录状态已失效',
+        cap: '请重新登录后再进入本应用。',
+      }
+    case 'offline':
+      return {
+        title: '无法连接平台接口',
+        cap: '为保证应用状态有效，每次启动都需要联网校验成功（平台未配置离线宽限期）。请检查网络后重试；进入应用后断网仍可继续使用。',
+      }
+    default:
+      return {
+        title: '应用校验未通过',
+        cap: `启动校验失败${failure.detail ? `：${failure.detail}` : ''}，请稍后重试或联系平台运维。`,
+      }
+  }
+}
+
 /** 语义化版本比较：a>b → 1，a<b → -1，相等 → 0（非法段按 0 处理） */
 export function compareVersions(a: string, b: string): number {
   const norm = (v: string) =>
