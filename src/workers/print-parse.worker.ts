@@ -10,6 +10,11 @@
 import * as Comlink from 'comlink'
 import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist'
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+import {
+  needsOrientationFix,
+  orientationMatrix,
+  readImageInfo,
+} from '@/lib/print/imageinfo'
 import type { ParsedFilePayload, ParsedPagePayload } from '@/lib/print/parse'
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl as string
@@ -68,44 +73,120 @@ async function decodePdf(id: string, fileName: string, buffer: ArrayBuffer): Pro
   return pages
 }
 
-async function decodeImage(id: string, fileName: string, buffer: ArrayBuffer, ext: string): Promise<ParsedPagePayload[]> {
+async function decodeImage(
+  id: string,
+  fileName: string,
+  buffer: ArrayBuffer,
+  ext: string,
+): Promise<{ pages: ParsedPagePayload[]; buffer: ArrayBuffer }> {
   const mime = ext === 'png' ? 'image/png' : 'image/jpeg'
+  // 文件头尺寸 + EXIF 方向（用于判断浏览器是否已按方向解码，以及探测降采样）
+  const info = readImageInfo(new Uint8Array(buffer), ext)
+  const orientation = info?.exifOrientation ?? null
+  const needFix = needsOrientationFix(orientation)
+
+  // 不传 imageOrientation：实测 Chrome 对 Blob 源始终按 EXIF 解码
+  // （显式传 'none' 也被忽略），因此拿到的通常已经是"正立"位图。
   const bitmap = await createImageBitmap(new Blob([buffer], { type: mime }))
   try {
-    const w = Math.max(1, Math.min(THUMB_WIDTH, Math.round(bitmap.width)))
-    const h = Math.max(1, Math.round((bitmap.height * w) / bitmap.width))
-    const canvas = new OffscreenCanvas(w, h)
-    const ctx = canvas.getContext('2d')
-    if (!ctx) throw new Error('无法创建画布')
-    ctx.drawImage(bitmap, 0, 0, w, h)
-    return [
-      {
-        id: `${id}:0`,
-        fileId: id,
-        sourcePage: 0,
-        name: fileName,
-        widthPt: bitmap.width * PX_TO_PT,
-        heightPt: bitmap.height * PX_TO_PT,
-        thumb: await thumbBlobFromCanvas(canvas),
-      },
-    ]
+    // 浏览器是否真的应用了 EXIF：5~8 会用交换宽高暴露出来（2/3/4 无法从尺寸判断，按已应用处理）
+    const storedW = info?.width ?? bitmap.width
+    const storedH = info?.height ?? bitmap.height
+    const dimsSwapped = bitmap.width === storedH && bitmap.height === storedW && storedW !== storedH
+    const dimsKept = bitmap.width === storedW && bitmap.height === storedH
+    const browserApplied = !needFix ? true : orientation !== null && orientation >= 5 ? dimsSwapped : true
+    const browserIgnored = needFix && !browserApplied && dimsKept
+
+    let dispW = needFix && !browserIgnored ? bitmap.width : storedW
+    let dispH = needFix && !browserIgnored ? bitmap.height : storedH
+    let source: OffscreenCanvas | ImageBitmap = bitmap
+    let reencode = false
+
+    if (needFix) {
+      if (browserIgnored) {
+        // 兜底：浏览器没按 EXIF 处理（老版本或非 Chrome 内核）→ 自己用画布矩阵转正
+        const m = orientationMatrix(orientation as number, bitmap.width, bitmap.height)
+        const full = new OffscreenCanvas(m.outWidth, m.outHeight)
+        const fctx = full.getContext('2d')
+        if (!fctx) throw new Error('无法创建画布')
+        fctx.setTransform(m.a, m.b, m.c, m.d, m.e, m.f)
+        fctx.drawImage(bitmap, 0, 0)
+        source = full
+        dispW = m.outWidth
+        dispH = m.outHeight
+      }
+      // 统一重新编码：把方向烘焙进像素，PDF 里不再残留 EXIF（否则下游可能二次旋转）
+      reencode = true
+    }
+
+    // ① 需要时重新编码为"已转正且无 EXIF"的字节（导出使用的就是它）
+    let outBuffer = buffer
+    if (reencode) {
+      const canvas =
+        source instanceof OffscreenCanvas
+          ? source
+          : (() => {
+              const c = new OffscreenCanvas(source.width, source.height)
+              const cx = c.getContext('2d')
+              if (!cx) throw new Error('无法创建画布')
+              cx.drawImage(source as ImageBitmap, 0, 0)
+              return c
+            })()
+      const blob =
+        ext === 'png'
+          ? await canvas.convertToBlob({ type: 'image/png' })
+          : await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.92 })
+      outBuffer = await blob.arrayBuffer()
+    }
+
+    // ② 缩略图：始终来自同一份"最终像素"，保证预览与导出一致
+    const tw = Math.max(1, Math.min(THUMB_WIDTH, Math.round(dispW)))
+    const th = Math.max(1, Math.round((dispH * tw) / dispW))
+    const thumbCanvas = new OffscreenCanvas(tw, th)
+    const tctx = thumbCanvas.getContext('2d')
+    if (!tctx) throw new Error('无法创建画布')
+    if (source instanceof OffscreenCanvas) {
+      tctx.drawImage(source, 0, 0, dispW, dispH, 0, 0, tw, th)
+    } else {
+      tctx.drawImage(bitmap, 0, 0, tw, th)
+    }
+
+    return {
+      buffer: outBuffer,
+      pages: [
+        {
+          id: `${id}:0`,
+          fileId: id,
+          sourcePage: 0,
+          name: fileName,
+          widthPt: dispW * PX_TO_PT,
+          heightPt: dispH * PX_TO_PT,
+          exifOrientation: needFix ? (orientation as number) : null,
+          thumb: await thumbBlobFromCanvas(thumbCanvas),
+        },
+      ],
+    }
   } finally {
     bitmap.close()
   }
 }
 
-/**
- * @param forcedId 草稿恢复时复用原文件 id，保证 pageId 稳定、识别结果可匹配
- */
 async function parse(file: File, forcedId?: string): Promise<ParsedFilePayload> {
   const ext = extOf(file.name)
   const id = forcedId ?? genId()
-  const buffer = await file.arrayBuffer()
+  const rawBuffer = await file.arrayBuffer()
   const displayName = file.name.replace(/\.[^.]+$/, '')
-  const pages =
-    ext === 'pdf'
-      ? await decodePdf(id, displayName, buffer)
-      : await decodeImage(id, displayName, buffer, ext)
+
+  let buffer = rawBuffer
+  let pages: ParsedPagePayload[]
+  if (ext === 'pdf') {
+    pages = await decodePdf(id, displayName, rawBuffer)
+  } else {
+    const decoded = await decodeImage(id, displayName, rawBuffer, ext)
+    pages = decoded.pages
+    // 转正时用的是重新编码后的字节（原始字节不再需要，随 transfer 释放）
+    buffer = decoded.buffer
+  }
 
   return Comlink.transfer(
     { id, name: file.name, ext, size: file.size, buffer, pages },
@@ -113,6 +194,53 @@ async function parse(file: File, forcedId?: string): Promise<ParsedFilePayload> 
   )
 }
 
-const api = { parse }
+export interface RenderPageArgs {
+  buffer: ArrayBuffer
+  /** pdf / png / jpg / jpeg */
+  ext: string
+  sourcePage: number
+  /** 目标宽度（px），用于原图查看（比缩略图清晰得多） */
+  width: number
+}
+
+/** 按需渲染一页"原图"（人工校正时需要看清票面号码/金额） */
+async function renderPage(args: RenderPageArgs): Promise<Blob> {
+  const width = Math.min(2400, Math.max(200, Math.round(args.width) || 1200))
+  if (args.ext === 'pdf') {
+    const task = getDocument({ data: new Uint8Array(args.buffer.slice(0)) })
+    const pdf = await task.promise
+    try {
+      const page = await pdf.getPage(args.sourcePage + 1)
+      const base = page.getViewport({ scale: 1 })
+      const viewport = page.getViewport({ scale: width / base.width })
+      const canvas = new OffscreenCanvas(Math.round(viewport.width), Math.round(viewport.height))
+      const ctx = canvas.getContext('2d', { willReadFrequently: true })
+      if (!ctx) throw new Error('无法创建画布')
+      await page.render({
+        canvas: canvas as unknown as HTMLCanvasElement,
+        canvasContext: ctx as unknown as CanvasRenderingContext2D,
+        viewport,
+      }).promise
+      return canvas.convertToBlob({ type: 'image/jpeg', quality: 0.9 })
+    } finally {
+      await task.destroy()
+    }
+  }
+  const mime = args.ext === 'png' ? 'image/png' : 'image/jpeg'
+  const bitmap = await createImageBitmap(new Blob([args.buffer], { type: mime }))
+  try {
+    const w = Math.max(1, Math.round(width))
+    const h = Math.max(1, Math.round((bitmap.height * w) / bitmap.width))
+    const canvas = new OffscreenCanvas(w, h)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('无法创建画布')
+    ctx.drawImage(bitmap, 0, 0, w, h)
+    return canvas.convertToBlob({ type: 'image/jpeg', quality: 0.9 })
+  } finally {
+    bitmap.close()
+  }
+}
+
+const api = { parse, renderPage }
 Comlink.expose(api)
 export type ParseWorkerApi = typeof api

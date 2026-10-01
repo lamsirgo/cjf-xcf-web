@@ -50,6 +50,12 @@ export interface ScanResult {
 
 let zxingPrepared = false
 let zxingLoading: Promise<void> | null = null
+/**
+ * wasm 引擎不可用（离线未缓存 / CSP 拦截 / 内存不足）。
+ * 一旦失败就不再逐页重试加载：否则每页都会重新发起一次失败的加载，
+ * 大批量票据下会拖慢整体扫描。此时退化为 jsQR + 图像增强兜底。
+ */
+let zxingUnavailable = false
 
 /**
  * 注册 wasm 加载覆盖：zxing-wasm 默认 locateFile 指向 jsDelivr CDN，
@@ -62,15 +68,23 @@ function registerZxingOverrides(): void {
 /** 预加载识别引擎（D01：主线程据此显示「正在准备识别引擎」） */
 async function ready(): Promise<boolean> {
   if (zxingPrepared) return true
+  if (zxingUnavailable) return false
   if (!zxingLoading) {
     zxingLoading = Promise.resolve(
       prepareZXingModule({
         overrides: { locateFile: () => zxingWasmUrl as string },
         fireImmediately: true,
       }),
-    ).then(() => {
-      zxingPrepared = true
-    })
+    )
+      .then(() => {
+        zxingPrepared = true
+      })
+      .catch((err) => {
+        // 加载失败：标记不可用，避免每页重复失败
+        zxingUnavailable = true
+        zxingLoading = null
+        throw err
+      })
   }
   await zxingLoading
   return zxingPrepared
@@ -84,13 +98,21 @@ function tryJsQR(img: ImageData): string | null {
 }
 
 async function tryZxing(img: ImageData): Promise<string | null> {
+  if (zxingUnavailable) return null
   // 即使未走 ready()，也先确保使用同源 wasm（覆盖库默认 CDN）
   if (!zxingPrepared) registerZxingOverrides()
-  const results = await readBarcodes(img, {
-    formats: ['QRCode'],
-    maxNumberOfSymbols: 1,
-  })
-  return results[0]?.text || null
+  try {
+    const results = await readBarcodes(img, {
+      formats: ['QRCode'],
+      maxNumberOfSymbols: 1,
+    })
+    return results[0]?.text || null
+  } catch (err) {
+    // wasm 加载/运行失败：本 Worker 内不再重试该引擎（jsQR + enhance 仍可用）
+    zxingUnavailable = true
+    zxingPrepared = false
+    throw err
+  }
 }
 
 /** 灰度 + 对比度拉伸（双引擎失败后的兜底预处理）。 */

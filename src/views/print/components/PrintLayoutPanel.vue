@@ -81,7 +81,13 @@
       <van-button size="small" plain type="primary" @click="onSave">保存为预设</van-button>
     </div>
 
-    <div v-if="usagePages > 0" class="usage-tip">本账号累计导出 {{ usagePages }} 页（平台记录，仅计数不含票面）</div>
+    <div v-if="dailyCap > 0" class="usage-tip">
+      今日导出额度：{{ usedToday }} / {{ dailyCap }} 页<template v-if="usagePages > 0">；本账号累计导出 {{ usagePages }} 页</template>
+      （平台记录，仅计数不含票面）
+    </div>
+    <div v-else-if="usagePages > 0" class="usage-tip">
+      本账号累计导出 {{ usagePages }} 页（平台记录，仅计数不含票面）
+    </div>
   </div>
 </template>
 
@@ -93,6 +99,8 @@ const props = defineProps<{
   state: SettingsState
   presets: PrintNamedPreset[]
   usagePages: number
+  dailyCap: number
+  usedToday: number
 }>()
 const emit = defineEmits<{
   (e: 'select', p: SettingsState['preset']): void

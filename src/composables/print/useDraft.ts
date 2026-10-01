@@ -54,6 +54,13 @@ interface StoredDraftMeta {
   fileIds?: string[]
   metas?: InvoiceMeta[]
   dupIgnored?: string[]
+  /**
+   * 文件字节是否已全部落盘。
+   * 写入顺序：先写清单(ready=false) → 写字节 → 置 ready=true。
+   * 中途被杀进程只会得到 ready=false，加载时视为无草稿，
+   * 而不是"用新字节配上旧清单/旧识别结果"。
+   */
+  filesReady?: boolean
 }
 
 function openDb(): Promise<IDBDatabase> {
@@ -170,20 +177,37 @@ async function saveOpfsFiles(scope: string, files: File[], fileIds?: string[]): 
   const dir = await getDraftDir(scope)
   const prev = await dbTx<StoredDraftMeta | undefined>(META_STORE, 'readonly', (s) => s.get(scope))
 
-  const entries: DraftFileEntry[] = []
+  const entries: DraftFileEntry[] = files.map((f, i) => ({
+    slot: String(i),
+    name: f.name,
+    type: f.type,
+    lastModified: f.lastModified,
+    size: f.size,
+  }))
+
+  // ① 先写清单并标记未就绪（此时旧字节仍在，若此刻崩溃 → 加载视为无草稿）
+  await dbPatch<StoredDraftMeta>(META_STORE, scope, (old) => ({
+    v: 3,
+    savedAt: Date.now(),
+    settings: old?.settings ?? {},
+    metas: old?.metas,
+    dupIgnored: old?.dupIgnored,
+    files: entries,
+    fileIds,
+    filesReady: false,
+  }))
+
+  // ② 写字节
   for (let i = 0; i < files.length; i += 1) {
-    const f = files[i]
-    const slot = String(i)
-    const handle = await dir.getFileHandle(slot, { create: true })
+    const handle = await dir.getFileHandle(String(i), { create: true })
     const writable = await handle.createWritable()
     try {
-      await writable.write(f)
+      await writable.write(files[i])
     } finally {
       await writable.close()
     }
-    entries.push({ slot, name: f.name, type: f.type, lastModified: f.lastModified, size: f.size })
   }
-  // 文件数变少时清掉多余槽位
+  // ③ 文件数变少时清掉多余槽位
   const stale = Math.max(0, (prev?.files?.length ?? 0) - files.length)
   for (let i = 0; i < stale; i += 1) {
     try {
@@ -193,15 +217,10 @@ async function saveOpfsFiles(scope: string, files: File[], fileIds?: string[]): 
     }
   }
 
-  await dbPatch<StoredDraftMeta>(META_STORE, scope, (old) => ({
-    v: 3,
-    savedAt: Date.now(),
-    settings: old?.settings ?? {},
-    metas: old?.metas,
-    dupIgnored: old?.dupIgnored,
-    files: entries,
-    fileIds,
-  }))
+  // ④ 全部落盘后才标记就绪
+  await dbPatch<StoredDraftMeta>(META_STORE, scope, (old) =>
+    old ? { ...old, v: 3, filesReady: true, savedAt: Date.now() } : undefined,
+  )
 }
 
 /** 只更新元数据（设置/识别结果），不碰文件字节 */
@@ -212,7 +231,8 @@ async function saveOpfsMeta(
   dupIgnored?: string[],
 ): Promise<void> {
   await dbPatch<StoredDraftMeta>(META_STORE, scope, (old) => {
-    if (!old) return undefined // 没有文件草稿时无需单独保存设置（设置在 localStorage）
+    // 没有文件草稿、或上一次写字节尚未完成时不单独保存设置（设置在 localStorage 里）
+    if (!old || old.filesReady !== true) return undefined
     return { ...old, v: 3, savedAt: Date.now(), settings, metas, dupIgnored }
   })
 }
@@ -221,7 +241,7 @@ async function loadOpfs(scope: string): Promise<PrintDraft | null> {
   const meta = await dbTx<StoredDraftMeta | undefined>(META_STORE, 'readonly', (store) =>
     store.get(scope),
   )
-  if (!meta) return null
+  if (!meta || meta.filesReady !== true) return null
   const dir = await getDraftDir(scope)
   const files = await Promise.all(
     meta.files.map(async (entry) => {
@@ -245,13 +265,14 @@ async function loadOpfs(scope: string): Promise<PrintDraft | null> {
 
 /** 回退/兼容：整份草稿写入 IndexedDB（同样按用户分区） */
 function saveIdbFiles(scope: string, files: File[], fileIds?: string[]): Promise<void> {
-  return dbPatch<PrintDraft>(LEGACY_STORE, scope, (old) => ({
+  return dbPatch<PrintDraft & { filesReady?: boolean }>(LEGACY_STORE, scope, (old) => ({
     savedAt: Date.now(),
     files,
     fileIds,
     settings: old?.settings ?? {},
     metas: old?.metas,
     dupIgnored: old?.dupIgnored,
+    filesReady: true,
   }))
 }
 

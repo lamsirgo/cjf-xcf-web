@@ -10,7 +10,13 @@
  * 同一源文件只加载/嵌入一次（按 fileId、fileId:page 缓存）。
  */
 
-import { PDFDocument, StandardFonts, rgb, type PDFEmbeddedPage } from 'pdf-lib'
+import {
+  PDFDocument,
+  StandardFonts,
+  rgb,
+  type PDFEmbeddedPage,
+  type TransformationMatrix,
+} from 'pdf-lib'
 import type { DecorItem } from './decor'
 import type { SheetLayout, SourceFile } from './types'
 
@@ -23,6 +29,72 @@ export interface RenderInput {
   onProgress?: (done: number, total: number) => void
 }
 
+/** 矩形（pdf-lib 页面盒的口径） */
+export interface PdfBox {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/** 嵌入一个源 PDF 页所需的几何信息 */
+export interface EmbedGeometry {
+  /** Form XObject 的 BBox（源内容坐标，裁剪仍按源空间生效） */
+  box: { left: number; bottom: number; right: number; top: number }
+  /** 需要烘焙进 Form 的 /Rotate 变换；0 度时为 undefined（等价单位平移） */
+  matrix?: TransformationMatrix
+  /** 计算缩放用的基准：决定了 drawPage 的 xScale/yScale 分母 */
+  baseW: number
+  baseH: number
+  /** 归一化后的旋转角（0/90/180/270） */
+  rotation: 0 | 90 | 180 | 270
+}
+
+function normalizeRotation(angle: number): 0 | 90 | 180 | 270 {
+  const a = (((Math.round((Number.isFinite(angle) ? angle : 0) / 90) * 90) % 360) + 360) % 360
+  return a === 90 || a === 180 || a === 270 ? a : 0
+}
+
+/**
+ * 源页 → 嵌入几何。
+ *
+ * 关键修复：pdf-lib 的 embedPdf 只取 MediaBox 且**完全忽略 /Rotate**，
+ * 而 pdf.js（预览与尺寸来源）使用的是「CropBox ?? MediaBox」并按 /Rotate 旋转。
+ * 二者不一致会导致：
+ * - 扫描件（/Rotate 90/270）导出后方向错乱；
+ * - 且因 xScale/yScale 用错基准而被非等比拉伸（预览与导出不一致）。
+ *
+ * 因此这里显式以 CropBox 为 BBox，并把 /Rotate 烘焙进 Form 的 Matrix，
+ * 同时把「缩放基准」按旋转是否交换宽高给出（baseW/baseH）。
+ *
+ * 矩阵语义（PDF 用户空间，逆时针为正；/Rotate 表示顺时针显示角度）。
+ * 先把内容绕原点旋转，再平移使其轴对称包围盒的 min 角落到 (0,0) ——
+ * 平移量必须包含 CropBox 原点 (x,y)，否则 CropBox 原点非零的页面会整体偏移：
+ *   0°  : 由 pdf-lib 默认矩阵等价实现（平移 -x,-y）      视觉尺寸 (w, h)
+ *   90° : (u,v) → (v - y, -u + x + w)                    视觉尺寸 (h, w)
+ *   180°: (u,v) → (-u + x + w, -v + y + h)               视觉尺寸 (w, h)
+ *   270°: (u,v) → (-v + y + h, u - x)                    视觉尺寸 (h, w)
+ */
+export function ticketEmbedGeometry(crop: PdfBox, rotationAngle: number): EmbedGeometry {
+  const x = crop.x
+  const y = crop.y
+  const w = Math.max(1e-6, crop.width)
+  const h = Math.max(1e-6, crop.height)
+  const rotation = normalizeRotation(rotationAngle)
+  const box = { left: x, bottom: y, right: x + w, top: y + h }
+
+  if (rotation === 90) {
+    return { box, matrix: [0, -1, 1, 0, -y, x + w], baseW: h, baseH: w, rotation }
+  }
+  if (rotation === 180) {
+    return { box, matrix: [-1, 0, 0, -1, x + w, y + h], baseW: w, baseH: h, rotation }
+  }
+  if (rotation === 270) {
+    return { box, matrix: [0, 1, -1, 0, y + h, -x], baseW: h, baseH: w, rotation }
+  }
+  return { box, baseW: w, baseH: h, rotation }
+}
+
 /** 文件名 + 页码，便于把失败原因说清楚 */
 function pageLabel(input: RenderInput, fileId: string, sourcePage: number): string {
   const f = input.files.find((x) => x.id === fileId)
@@ -32,11 +104,10 @@ function pageLabel(input: RenderInput, fileId: string, sourcePage: number): stri
 export async function renderPdf(input: RenderInput): Promise<Uint8Array> {
   const doc = await PDFDocument.create()
   const font = await doc.embedFont(StandardFonts.Helvetica)
-  const black = rgb(0, 0, 0)
 
   const fileMap = new Map(input.files.map((f) => [f.id, f]))
   const srcPdfCache = new Map<string, PDFDocument>()
-  const embeddedPageCache = new Map<string, PDFEmbeddedPage>()
+  const embeddedPageCache = new Map<string, { page: PDFEmbeddedPage } & EmbedGeometry>()
   const imageCache = new Map<string, Awaited<ReturnType<PDFDocument['embedJpg']>>>()
   const total = input.sheets.length
   let lastReported = -1
@@ -80,27 +151,29 @@ export async function renderPdf(input: RenderInput): Promise<Uint8Array> {
         const key = `${f.id}:${p.sourcePage}`
         let embedded = embeddedPageCache.get(key)
         if (!embedded) {
-          let embeddedPage: PDFEmbeddedPage | undefined
           try {
-            ;[embeddedPage] = await doc.embedPdf(src, [p.sourcePage])
+            const srcPage = src.getPage(p.sourcePage)
+            const geo = ticketEmbedGeometry(srcPage.getCropBox(), srcPage.getRotation().angle)
+            const embeddedPage = geo.matrix
+              ? await doc.embedPage(srcPage, geo.box, geo.matrix)
+              : await doc.embedPage(srcPage, geo.box)
+            if (!embeddedPage) {
+              throw new Error('嵌入结果为空')
+            }
+            embedded = { page: embeddedPage, ...geo }
           } catch (err) {
             throw new Error(
               `PDF 页面嵌入失败（${pageLabel(input, f.id, p.sourcePage)}）：${(err as Error).message}`,
             )
           }
-          if (!embeddedPage) {
-            throw new Error(`PDF 页面不存在：${pageLabel(input, f.id, p.sourcePage)}`)
-          }
-          embedded = embeddedPage
           embeddedPageCache.set(key, embedded)
         }
-        const ew = Math.max(1e-6, embedded.width)
-        const eh = Math.max(1e-6, embedded.height)
-        page.drawPage(embedded, {
+        page.drawPage(embedded.page, {
           x: p.x,
           y: flipRect(p.y, h),
-          xScale: w / ew,
-          yScale: h / eh,
+          // 旋转 90/270 时内容宽高互换，缩放基准随之互换（否则会被非等比拉伸）
+          xScale: w / Math.max(1e-6, embedded.baseW),
+          yScale: h / Math.max(1e-6, embedded.baseH),
         })
       } else if (f.ext === 'jpg' || f.ext === 'jpeg' || f.ext === 'png') {
         let img = imageCache.get(f.id)
@@ -132,14 +205,6 @@ export async function renderPdf(input: RenderInput): Promise<Uint8Array> {
           thickness: item.thickness,
           color: rgb(...item.color),
           ...(item.dash ? { dashArray: item.dash } : {}),
-        })
-      } else if (item.kind === 'fill') {
-        page.drawRectangle({
-          x: item.x,
-          y: flipRect(item.y, item.height),
-          width: item.width,
-          height: item.height,
-          color: rgb(...item.color),
         })
       } else {
         page.drawText(item.text, {

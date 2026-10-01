@@ -1,7 +1,7 @@
 /**
  * 标记装饰（纯函数）。
  *
- * 输出与渲染无关的图元（线段 / 填充块 / 文本），由 canvas 预览与
+ * 输出与渲染无关的图元（线段 / 文本），由 canvas 预览与
  * pdf-lib 导出各自解释，保证两条路径装饰一致。虚线用原生 dash 参数表达
  * （不再展开成数百段实线，避免大文档产生十万级图元）。
  *
@@ -32,15 +32,6 @@ export interface DecorLine {
   thickness: number
 }
 
-export interface DecorFill {
-  kind: 'fill'
-  x: number
-  y: number
-  width: number
-  height: number
-  color: RGB
-}
-
 export interface DecorText {
   kind: 'text'
   x: number
@@ -50,7 +41,7 @@ export interface DecorText {
   color: RGB
 }
 
-export type DecorItem = DecorLine | DecorFill | DecorText
+export type DecorItem = DecorLine | DecorText
 
 const MARK_COLOR: RGB = [0.13, 0.13, 0.13]
 const LINE_THICKNESS = 0.6

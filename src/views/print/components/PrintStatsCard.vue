@@ -5,7 +5,13 @@
     <!-- 未扫描 -->
     <template v-if="!hasScanned && !scanning">
       <div class="sc-cap">逐页扫描发票二维码，自动识别号码与金额，标记重复发票。全程本地识别，票据不上传。</div>
-      <van-button type="primary" block round @click="emit('scan')">一键去重 / 开始统计</van-button>
+      <van-button
+        type="primary"
+        block
+        round
+        :disabled="!hasFiles"
+        @click="emit('scan')"
+      >{{ hasFiles ? '一键去重 / 开始统计' : '请先添加票据文件' }}</van-button>
     </template>
 
     <!-- 扫描中 -->
@@ -99,6 +105,7 @@ const props = defineProps<{
   stats: InvoiceStats
   failures: ScanFailure[]
   dedupEnabled: boolean
+  hasFiles: boolean
 }>()
 
 const emit = defineEmits<{

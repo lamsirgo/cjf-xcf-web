@@ -12,13 +12,13 @@
       </template>
     </van-nav-bar>
 
-    <!-- 应用停用（平台侧开关关闭时，服务端一律拒绝，前端不展示任何入口） -->
-    <div v-if="disabled" class="disabled-card">
-      <van-icon name="lock" class="dc-icon" />
-      <div class="dc-title">应用已停用</div>
-      <div class="dc-cap">「发票合并打印」当前未开通或已被管理员停用，请联系平台管理员。</div>
+    <!-- 门禁：停用 / 需要联网校验 / 需要更新（MD §8.1 强制失效 + I05 版本对齐） -->
+    <div v-if="gateReason !== 'ok'" class="disabled-card">
+      <van-icon :name="gateIcon" class="dc-icon" />
+      <div class="dc-title">{{ gateTitle }}</div>
+      <div class="dc-cap">{{ gateCap }}</div>
       <van-button size="small" plain type="primary" :loading="gateChecking" @click="checkGate">
-        重新检查
+        {{ gateReason === 'update-required' ? '刷新页面' : '重新检查' }}
       </van-button>
     </div>
 
@@ -70,6 +70,7 @@
         :stats="stats"
         :failures="failures"
         :dedup-enabled="capabilities.dedup"
+        :has-files="pageCount > 0"
         @scan="onScan"
         @rescan="onRescan"
         @copy="onCopyStats"
@@ -84,6 +85,8 @@
           :state="state"
           :presets="namedPresets"
           :usage-pages="usagePages"
+        :daily-cap="dailyCap"
+        :used-today="usedToday"
           @select="selectPreset"
           @test="onPrintTest"
           @save-preset="onSavePreset"
@@ -102,20 +105,20 @@
         <PrintPreview
           :sheets="sheets"
           :files="files"
-          :decorator="decorator"
-          @update:current="current = $event"
+          :decorator="effectiveDecorator"
+          @update:current="onCurrentChange"
         />
       </div>
 
       <!-- 隐私声明（G04） -->
       <p class="privacy">
         <van-icon name="shield-o" /> 票据全程在浏览器本地处理（排版、识别、导出），
-        <b>不上传服务器</b>；平台仅下发用量阈值并记录不含票面的导出页数。本地草稿保留 7 天，可在「清空」中一键删除。
+        <b>不上传服务器</b>；平台仅下发用量阈值并记录不含票面的导出页数。本地草稿按账号隔离并保留 7 天，可在「清空」中一键删除。<template v-if="appVersion">（应用版本 {{ appVersion }}）</template>
       </p>
     </template>
 
     <!-- ⑤ 导出 -->
-    <div v-if="!disabled" class="bottom-bar">
+    <div v-if="gateReason === 'ok'" class="bottom-bar">
       <div v-if="exporting && exportProgress.total > 0" class="export-progress">
         <van-progress
           :percentage="exportPercent"
@@ -123,6 +126,9 @@
           :show-pivot="false"
         />
         <span>正在生成 PDF {{ exportProgress.done }}/{{ exportProgress.total }} 页</span>
+      </div>
+      <div v-if="dailyCap > 0" class="quota-line">
+        今日导出额度：{{ usedToday }} / {{ dailyCap }} 页
       </div>
       <div class="bb-actions">
         <van-button
@@ -182,6 +188,7 @@
         :ignored="ignoredSet"
         @toggle-ignore="toggleIgnore"
         @edit="onDupEdit"
+        @view-original="openOriginal"
       />
     </van-popup>
 
@@ -200,7 +207,29 @@
         :meta-of="(pid: string) => metaMap.get(pid)"
         :resolve-page="resolvePage"
         @save="onManualSave"
+        @view-original="openOriginal"
       />
+    </van-popup>
+
+    <!-- 原图查看（人工校正时核对票面） -->
+    <van-popup
+      v-model:show="originalVisible"
+      position="bottom"
+      round
+      closeable
+      :style="{ maxHeight: '92%' }"
+      @closed="closeOriginal"
+    >
+      <div class="ov-wrap">
+        <div class="ov-head">
+          <span class="ov-title">{{ originalTarget?.pageLabel || '原图' }}</span>
+          <span class="ov-sub">{{ originalTarget?.name }}</span>
+        </div>
+        <div v-if="originalLoading" class="ov-loading">正在渲染原图…</div>
+        <div v-else-if="originalError" class="ov-error">{{ originalError }}</div>
+        <img v-else-if="originalTarget" :src="originalTarget.url" class="ov-img" alt="票据原图" />
+        <div class="ov-tip">原图仅在本地渲染，用于核对票面号码/金额，不会上传。</div>
+      </div>
     </van-popup>
 
     <!-- 更新日志 -->
@@ -231,13 +260,22 @@ import {
 } from 'vant'
 import { getPrintManifest, reportPrintUsage } from '@/api/print'
 import { BizError } from '@/api/request'
+import { CLIENT_VERSION, evaluateGate, type GateReason } from '@/lib/print/gate'
 import type { PrintCapabilities, PrintManifest } from '@/api/print'
-import { computeLayout, layoutNumberBand } from '@/lib/print/layout'
-import { FALLBACK_LIMITS, paperSize, type PrintLimits } from '@/lib/print/types'
+import { clampOffsets, computeLayout } from '@/lib/print/layout'
+import {
+  FALLBACK_LIMITS,
+  normalizeLimits,
+  numberBandPt,
+  paperSize,
+  type DecoratorSpec,
+  type PrintLimits,
+} from '@/lib/print/types'
 import { useDraft } from '@/composables/print/useDraft'
 import { useFileSet } from '@/composables/print/useFileSet'
 import { usePdfExport } from '@/composables/print/usePdfExport'
 import { usePrintSettings } from '@/composables/print/usePrintSettings'
+import { useOriginalView } from '@/composables/print/useOriginalView'
 import { useQrScan, type ManualInput } from '@/composables/print/useQrScan'
 import { useInvoiceStats, type ResolvedPage } from '@/composables/print/useInvoiceStats'
 import { useAuthStore } from '@/stores/auth'
@@ -252,7 +290,7 @@ import PrintStatsCard from './components/PrintStatsCard.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
-const limits = ref<PrintLimits>({ ...FALLBACK_LIMITS })
+const limits = ref<PrintLimits>(normalizeLimits(FALLBACK_LIMITS))
 
 /** ---------- 应用开关与能力位（H2 / I04） ---------- */
 const ALL_CAPS: PrintCapabilities = {
@@ -263,38 +301,112 @@ const ALL_CAPS: PrintCapabilities = {
   cloudBatch: false,
 }
 const capabilities = ref<PrintCapabilities>({ ...ALL_CAPS })
-const disabled = ref(false)
+/** 门禁结果：ok / 应用停用 / 需要联网校验 / 需要更新客户端 */
+const gateReason = ref<GateReason | 'disabled'>('ok')
 const gateChecking = ref(false)
 const usagePages = ref(0)
+const dailyCap = ref(0)
+const usedToday = ref(0)
 const appVersion = ref('')
+const LAST_OK_KEY = 'print_gate_ok_at'
 
+const gateTitle = computed(() => {
+  if (gateReason.value === 'disabled') return '应用已停用'
+  if (gateReason.value === 'update-required') return '请更新应用'
+  return '需要联网校验'
+})
+const gateCap = computed(() => {
+  if (gateReason.value === 'disabled') {
+    return '「发票合并打印」当前未开通或已被管理员停用，请联系平台管理员。'
+  }
+  if (gateReason.value === 'update-required') {
+    return '当前版本已不受支持，请刷新页面以加载最新版本后再使用。'
+  }
+  return '为保证应用状态有效，每次启动都需要联网校验成功（平台未配置离线宽限期）。请检查网络后重试；进入应用后断网仍可继续使用。'
+})
+const gateIcon = computed(() =>
+  gateReason.value === 'disabled' ? 'lock' : gateReason.value === 'update-required' ? 'upgrade' : 'wifi-o',
+)
+
+function readLastOkAt(): number | null {
+  const raw = localStorage.getItem(LAST_OK_KEY)
+  const n = raw ? Number(raw) : NaN
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+/** 启动/重试门禁：联网校验成功才允许进入（宽限期由平台下发） */
 async function checkGate(): Promise<void> {
   gateChecking.value = true
   try {
     const m: PrintManifest = await getPrintManifest()
-    disabled.value = false
+    // 平台可以返回 enabled=false（例如灰度收口）；此时一律不进入应用
+    if (m.enabled === false) {
+      gateReason.value = 'disabled'
+      return
+    }
+    lastGraceMinutes = Math.max(0, Number(m.offlineGraceMinutes ?? 0))
+    const result = evaluateGate({
+      validationOk: true,
+      lastOkAt: readLastOkAt(),
+      now: Date.now(),
+      graceMinutes: lastGraceMinutes,
+      clientVersion: CLIENT_VERSION,
+      minClientVersion: m.minClientVersion,
+    })
+    if (result.reason !== 'ok') {
+      gateReason.value = result.reason
+      return
+    }
+    if (result.recordOk) {
+      try {
+        localStorage.setItem(LAST_OK_KEY, String(Date.now()))
+      } catch {
+        /* 存不了也不影响本次进入 */
+      }
+    }
+    gateReason.value = 'ok'
     capabilities.value = { ...ALL_CAPS, ...(m.capabilities ?? {}) }
-    if (m.limits) limits.value = { ...FALLBACK_LIMITS, ...m.limits }
+    // 未授权能力必须真正失效，而不是只隐藏入口（见下方 effectiveDecorator 的硬收口）
+    if (!capabilities.value.duplex) state.duplex = false
+    limits.value = normalizeLimits({ ...FALLBACK_LIMITS, ...(m.limits ?? {}) })
     usagePages.value = m.usage?.exportPages ?? 0
+    dailyCap.value = m.usage?.dailyCap ?? 0
+    usedToday.value = m.usage?.usedToday ?? 0
     appVersion.value = m.appVersion ?? ''
   } catch (err) {
     if (err instanceof BizError && err.code === 1002) {
       // 平台明确拒绝：应用未开通/已停用 → 不进入应用
-      disabled.value = true
+      gateReason.value = 'disabled'
       return
     }
-    // 网络/离线等原因：不阻断本地能力，沿用内置阈值
-    limits.value = { ...FALLBACK_LIMITS }
-    showToast('未能获取平台配置，已使用本地默认限量（票据仍全程本地处理）')
+    // 网络/离线：按平台下发的宽限期判定（默认 0 → 必须联网校验）
+    const result = evaluateGate({
+      validationOk: false,
+      lastOkAt: readLastOkAt(),
+      now: Date.now(),
+      graceMinutes: lastGraceMinutes,
+      clientVersion: CLIENT_VERSION,
+      minClientVersion: null,
+    })
+    limits.value = normalizeLimits({ ...FALLBACK_LIMITS, ...limits.value })
+    if (result.reason === 'ok') {
+      showToast('离线模式：使用上次校验结果与本地默认限量（票据仍全程本地处理）')
+    } else {
+      gateReason.value = 'need-online'
+    }
   } finally {
     gateChecking.value = false
   }
 }
 
+/** 最近一次 manifest 下发的离线宽限期（离线重试时沿用） */
+let lastGraceMinutes = 0
+
 const {
   files,
   parsing,
   parseProgress,
+  orientationAdjusted,
   allPages,
   fileCount,
   pageCount,
@@ -316,15 +428,38 @@ const {
   deletePreset,
 } = usePrintSettings()
 
+/**
+ * 能力位硬收口：未授权的装饰能力在这里被强制关闭，
+ * 无论设置面板是否隐藏、命名预设里存了什么，都不会产生越权输出。
+ */
+const effectiveDecorator = computed<DecoratorSpec>(() =>
+  capabilities.value.duplex ? decorator.value : { ...decorator.value, duplex: false },
+)
+
 /** 开了序号时给票面留出票面外的序号带（装饰只在票面外绘制） */
-const numberBand = computed(() => layoutNumberBand(decorator.value))
+const numberBand = computed(() => numberBandPt(effectiveDecorator.value))
 const sheets = computed(() =>
   computeLayout(layoutSpec.value, allPages.value, {
-    duplex: decorator.value.duplex,
+    duplex: effectiveDecorator.value.duplex,
     numberBand: numberBand.value,
   }),
 )
 const current = ref(0)
+
+/** 预览可视页变化：钳制到有效范围，避免删除文件后 current 越界导致"导出当前页"失败 */
+function onCurrentChange(i: number) {
+  const max = Math.max(0, sheets.value.length - 1)
+  current.value = Math.min(Math.max(0, Math.trunc(i) || 0), max)
+}
+
+// 票据数量变化（删除/清空）时同步钳制
+watch(
+  () => sheets.value.length,
+  (len) => {
+    if (current.value > len - 1) current.value = Math.max(0, len - 1)
+  },
+)
+
 const showFiles = ref(false)
 /** 文件集视图：顺序列表 / 缩略图网格（A04） */
 const fileView = ref<'list' | 'grid'>(localStorage.getItem('print_file_view') === 'grid' ? 'grid' : 'list')
@@ -342,7 +477,7 @@ const { exporting, progress: exportProgress, doExport, sharePdf, printTestPage, 
   usePdfExport(
     () => sheets.value,
     () => files.value,
-    () => decorator.value,
+    () => effectiveDecorator.value,
     () => limits.value,
   )
 
@@ -387,6 +522,27 @@ const { hasScanned, dup, stats, pendingManual, copyStats, exportCsv } = useInvoi
   resolvePage,
 )
 
+const {
+  visible: originalVisible,
+  loading: originalLoading,
+  error: originalError,
+  target: originalTarget,
+  open: openOriginalView,
+  close: closeOriginal,
+} = useOriginalView()
+
+/** 打开某张票据的原图（需要按 pageId 反查所属文件） */
+function openOriginal(pageId: string) {
+  for (const f of files.value) {
+    const page = f.pages.find((p) => p.id === pageId)
+    if (page) {
+      void openOriginalView(f, page)
+      return
+    }
+  }
+  showFailToast('未找到该票据文件')
+}
+
 const showDup = ref(false)
 const showManual = ref(false)
 const showChangelog = ref(false)
@@ -413,6 +569,10 @@ function onDupEdit(pageId: string) {
 }
 
 async function onScan() {
+  if (allPages.value.length === 0) {
+    showToast('请先添加票据文件')
+    return
+  }
   try {
     await scanAll()
   } catch (err) {
@@ -463,9 +623,17 @@ function triggerPickFolder() {
 }
 
 async function importFiles(list: File[] | FileList, okText?: string) {
+  const before = orientationAdjusted.value.length
   try {
     await addFiles(list)
     if (okText) showSuccessToast(okText)
+    if (orientationAdjusted.value.length > before) {
+      const n = orientationAdjusted.value.length - before
+      showToast({
+        message: `已按照片方向信息（EXIF）自动转正 ${n} 张图片，预览与导出均为正立效果`,
+        duration: 4000,
+      })
+    }
   } catch (err) {
     showFailToast((err as Error).message)
   }
@@ -494,6 +662,7 @@ async function onFolderInput(e: Event) {
 }
 
 async function onPaste(e: ClipboardEvent) {
+  if (gateReason.value !== 'ok') return
   const pasted = Array.from(e.clipboardData?.files ?? [])
   if (pasted.length === 0) return
   await importFiles(pasted)
@@ -501,20 +670,21 @@ async function onPaste(e: ClipboardEvent) {
 
 /** ---------- 拖拽导入（A01）与同域链接拖入（A07） ---------- */
 const dragging = ref(false)
-let dragDepth = 0
 
 function onDragOver(e: DragEvent) {
   const types = e.dataTransfer?.types ?? []
   if (!types.includes('Files') && !types.includes('text/uri-list') && !types.includes('text/plain')) {
     return
   }
-  dragDepth += 1
+  // dragover 会连续触发，不能用累加计数（否则 dragleave 永远减不到 0，提示会残留）
   dragging.value = true
 }
 
-function onDragLeave() {
-  dragDepth = Math.max(0, dragDepth - 1)
-  if (dragDepth === 0) dragging.value = false
+function onDragLeave(e: DragEvent) {
+  const to = e.relatedTarget as Node | null
+  const root = e.currentTarget as Node | null
+  if (to && root && root.contains(to)) return // 仍在页面内部移动
+  dragging.value = false
 }
 
 /**
@@ -548,7 +718,6 @@ async function importFromUrl(raw: string): Promise<boolean> {
 }
 
 async function onDrop(e: DragEvent) {
-  dragDepth = 0
   dragging.value = false
   const dt = e.dataTransfer
   if (!dt) return
@@ -644,12 +813,13 @@ function genEventId(): string {
   return `evt_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`
 }
 
-function reportExport(pages: number, scope: 'all' | 'current') {
+function reportExport(pages: number, scope: 'all' | 'current', quotaToken: string | null) {
   const spec = layoutSpec.value
   void reportPrintUsage({
     eventType: 'local_export',
     quantity: Math.max(1, Math.min(5000, pages)),
     clientEventId: genEventId(),
+    quotaToken,
     // 仅版式元数据，绝不包含任何票面字段
     detail: {
       scope,
@@ -658,13 +828,14 @@ function reportExport(pages: number, scope: 'all' | 'current') {
       cols: spec.cols,
       paper: spec.paper,
       orientation: spec.orientation,
-      numbering: decorator.value.numbering,
-      divider: decorator.value.divider,
-      duplex: decorator.value.duplex,
+      numbering: effectiveDecorator.value.numbering,
+      divider: effectiveDecorator.value.divider,
+      duplex: effectiveDecorator.value.duplex,
     },
   })
     .then((r) => {
       if (typeof r?.exportPages === 'number') usagePages.value = r.exportPages
+      usedToday.value = Math.min(dailyCap.value || Number.MAX_SAFE_INTEGER, usedToday.value + pages)
     })
     .catch(() => {
       /* 离线或网络失败：不影响本地导出，用量以平台服务端为准 */
@@ -674,14 +845,13 @@ function reportExport(pages: number, scope: 'all' | 'current') {
 async function onExport(scope: 'all' | 'current') {
   try {
     const result = await doExport(scope, current.value)
-    if (result === 'busy') return
-    if (result === 'cancelled') {
+    if (result.status === 'busy') return
+    if (result.status === 'cancelled') {
       showToast('已取消保存')
       return
     }
     showSuccessToast('导出成功')
-    const pages = scope === 'current' ? 1 : sheets.value.length
-    reportExport(pages, scope)
+    reportExport(result.pages, scope, result.quotaToken)
   } catch (err) {
     showFailToast((err as Error).message)
   }
@@ -690,8 +860,8 @@ async function onExport(scope: 'all' | 'current') {
 async function onShare() {
   try {
     const result = await sharePdf()
-    if (result === 'busy') return
-    reportExport(sheets.value.length, 'all')
+    if (result.status === 'busy') return
+    reportExport(result.pages, 'all', result.quotaToken)
   } catch (err) {
     const name = (err as DOMException).name
     if (name === 'AbortError') return // 用户在系统分享面板取消
@@ -709,7 +879,9 @@ async function onPrintTest() {
         ? [base.widthMm, base.heightMm]
         : [base.heightMm, base.widthMm]
     const MM = 72 / 25.4
-    await printTestPage(pageMmW * MM, pageMmH * MM, spec.offsetXMm * MM, spec.offsetYMm * MM)
+    // 与排版使用同一偏移钳制，保证校准页显示的偏移就是实际生效的偏移
+    const off = clampOffsets(spec, numberBand.value)
+    await printTestPage(pageMmW * MM, pageMmH * MM, off.xMm * MM, off.yMm * MM)
   } catch (err) {
     showFailToast((err as Error).message)
   }
@@ -773,7 +945,7 @@ watch(parsing, (val) => {
 onMounted(async () => {
   window.addEventListener('paste', onPaste)
   await checkGate()
-  if (disabled.value) return
+  if (gateReason.value !== 'ok') return
 
   // 草稿按用户分区：先确保拿到用户信息，避免存到 anon 分区
   if (!auth.user) {
@@ -810,10 +982,11 @@ onMounted(async () => {
 onUnmounted(() => {
   window.removeEventListener('paste', onPaste)
   window.clearTimeout(saveTimer)
-  // 释放 Worker 内的票据字节缓存（主线程文件集随组件销毁回收）
+  // 释放 Worker 内的票据字节缓存 + 主线程文件集（含缩略图 blob URL，避免 SPA 内泄漏）
   const ids = files.value.map((f) => f.id)
   releaseScanFiles(ids)
   void releaseFiles(ids)
+  clear()
 })
 </script>
 
@@ -937,6 +1110,54 @@ onUnmounted(() => {
   padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
   background: var(--van-background-2, #fff);
   box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.06);
+}
+.ov-wrap {
+  padding: 16px 14px 20px;
+}
+.ov-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 10px;
+}
+.ov-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--van-text-color, #323233);
+}
+.ov-sub {
+  font-size: 12px;
+  color: var(--van-text-color-3, #969799);
+  word-break: break-all;
+}
+.ov-img {
+  display: block;
+  width: 100%;
+  max-height: 68vh;
+  object-fit: contain;
+  background: #fff;
+  border: 1px solid var(--van-border-color, #ebedf0);
+  border-radius: 6px;
+}
+.ov-loading,
+.ov-error {
+  padding: 40px 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--van-text-color-3, #969799);
+}
+.ov-error {
+  color: var(--van-danger-color, #ee0a24);
+}
+.ov-tip {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--van-text-color-3, #969799);
+}
+.quota-line {
+  padding: 0 2px 6px;
+  font-size: 11px;
+  color: var(--van-text-color-3, #969799);
 }
 .export-progress {
   display: flex;

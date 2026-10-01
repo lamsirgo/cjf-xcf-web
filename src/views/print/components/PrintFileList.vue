@@ -18,7 +18,7 @@
     <div v-if="view === 'grid'" class="fl-grid">
       <div v-for="(f, i) in files" :key="f.id" class="fl-card">
         <div class="fl-card-idx">{{ i + 1 }}</div>
-        <img :src="f.pages[0]?.thumbUrl" class="fl-card-thumb" alt="" />
+        <img :src="f.pages[0]?.thumbUrl" class="fl-card-thumb" alt="" loading="lazy" decoding="async" />
         <div class="fl-card-name">{{ f.name }}</div>
         <div class="fl-card-sub">{{ f.pages.length }} 页 · {{ humanSize(f.size) }}</div>
         <div class="fl-card-ops">
@@ -30,7 +30,7 @@
 
     <template v-else>
       <div v-for="(f, i) in files" :key="f.id" class="fl-item">
-        <img :src="f.pages[0]?.thumbUrl" class="fl-thumb" alt="" />
+        <img :src="f.pages[0]?.thumbUrl" class="fl-thumb" alt="" loading="lazy" decoding="async" />
         <div class="fl-meta">
           <div class="fl-name">{{ f.name }}</div>
           <div class="fl-sub">

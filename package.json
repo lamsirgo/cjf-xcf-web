@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test:core": "node scripts/print-core-test.mjs"
+    "test:core": "node scripts/print-core-test.mjs",
+    "test:e2e": "node scripts/e2e.mjs"
   },
   "dependencies": {
     "axios": "^1.7.9",

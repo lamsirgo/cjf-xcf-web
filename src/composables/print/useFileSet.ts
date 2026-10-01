@@ -2,7 +2,8 @@
 
 import { computed, ref, type Ref } from 'vue'
 import { parseFile, releaseFileThumbs, SUPPORTED_EXTS } from '@/lib/print/parse'
-import { FALLBACK_LIMITS, type PrintLimits, type SourceFile, type TicketPage } from '@/lib/print/types'
+import { needsOrientationFix } from '@/lib/print/imageinfo'
+import { normalizeLimits, type PrintLimits, type SourceFile, type TicketPage } from '@/lib/print/types'
 
 const MB = 1024 * 1024
 
@@ -10,22 +11,12 @@ export function fileExtOf(name: string): string {
   return (name.split('.').pop() ?? '').toLowerCase()
 }
 
-/** 平台阈值兜底：脏配置（0/NaN/负数）不会导致「无上限」 */
-function safeLimits(lm: PrintLimits): PrintLimits {
-  const pick = (v: unknown, fallback: number) =>
-    typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : fallback
-  return {
-    maxFiles: pick(lm?.maxFiles, FALLBACK_LIMITS.maxFiles),
-    maxFileSizeMb: pick(lm?.maxFileSizeMb, FALLBACK_LIMITS.maxFileSizeMb),
-    maxTotalSizeMb: pick(lm?.maxTotalSizeMb, FALLBACK_LIMITS.maxTotalSizeMb),
-    maxExportPages: pick(lm?.maxExportPages, FALLBACK_LIMITS.maxExportPages),
-  }
-}
-
 export function useFileSet(limits: Ref<PrintLimits>) {
   const files = ref<SourceFile[]>([])
   const parsing = ref(false)
   const parseProgress = ref({ done: 0, total: 0 })
+  /** 带 EXIF 方向、已被自动转正的图片票据（用于给用户一条明确回执） */
+  const orientationAdjusted = ref<string[]>([])
 
   const allPages = computed<TicketPage[]>(() => files.value.flatMap((f) => f.pages))
   const fileCount = computed(() => files.value.length)
@@ -39,7 +30,9 @@ export function useFileSet(limits: Ref<PrintLimits>) {
   async function addFiles(list: FileList | File[], ids?: string[]) {
     const incoming = Array.from(list)
     if (incoming.length === 0) return
-    const lm = safeLimits(limits.value)
+    // 并发导入互斥：两次导入同时通过上限校验会绕过文件数/总量限制
+    if (parsing.value) throw new Error('正在解析上一批文件，请稍候再导入')
+    const lm = normalizeLimits(limits.value)
 
     for (const f of incoming) {
       const ext = fileExtOf(f.name)
@@ -74,6 +67,12 @@ export function useFileSet(limits: Ref<PrintLimits>) {
       }
       // 全部成功后才提交，保证整批原子性
       files.value = [...files.value, ...parsedList]
+      const adjusted = parsedList
+        .filter((f) => needsOrientationFix(f.exifOrientation ?? null))
+        .map((f) => f.name)
+      if (adjusted.length > 0) {
+        orientationAdjusted.value = [...new Set([...orientationAdjusted.value, ...adjusted])]
+      }
     } catch (err) {
       parsedList.forEach(releaseFileThumbs)
       throw err
@@ -109,6 +108,7 @@ export function useFileSet(limits: Ref<PrintLimits>) {
     files,
     parsing,
     parseProgress,
+    orientationAdjusted,
     allPages,
     fileCount,
     pageCount,

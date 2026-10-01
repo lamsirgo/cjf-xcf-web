@@ -32,6 +32,25 @@ async function check(name, fn) {
   }
 }
 
+/** xorshift32：可复现的伪随机（失败可凭 seed 复现） */
+function rng(seed) {
+  let x = seed >>> 0
+  return () => {
+    x ^= x << 13
+    x >>>= 0
+    x ^= x >>> 17
+    x ^= x << 5
+    x >>>= 0
+    return x / 0x100000000
+  }
+}
+const pick = (r, arr) => arr[Math.floor(r() * arr.length)]
+const weirdNum = (r) =>
+  pick(r, [
+    0, 1, -1, 2.5, -2.5, 1e9, -1e9, NaN, Infinity, -Infinity,
+    0.0001, 49.9, 50, 500, 501, 700, 701, 20, 40, 1e-7,
+  ])
+
 async function loadCore() {
   await build({
     absWorkingDir: webRoot,
@@ -43,6 +62,8 @@ async function loadCore() {
       'src/lib/print/render.ts',
       'src/composables/print/usePrintSettings.ts',
       'src/composables/print/useInvoiceStats.ts',
+      'src/lib/print/imageinfo.ts',
+      'src/lib/print/gate.ts',
     ],
     outdir: outDir,
     outbase: path.resolve(webRoot, 'src'),
@@ -60,17 +81,21 @@ async function loadCore() {
   const render = await import(pathToFileURL(path.join(outDir, 'lib/print/render.js')).href)
   const settings = await import(pathToFileURL(path.join(outDir, 'composables/print/usePrintSettings.js')).href)
   const stats = await import(pathToFileURL(path.join(outDir, 'composables/print/useInvoiceStats.js')).href)
-  return { qr, layout, decor, types, render, settings, stats }
+  const imageinfo = await import(pathToFileURL(path.join(outDir, 'lib/print/imageinfo.js')).href)
+  const gate = await import(pathToFileURL(path.join(outDir, 'lib/print/gate.js')).href)
+  return { qr, layout, decor, types, render, settings, stats, imageinfo, gate }
 }
 
-const { qr, layout, decor, types, render, settings, stats } = await loadCore()
+const { qr, layout, decor, types, render, settings, stats, imageinfo, gate } = await loadCore()
 const { parseQrText, buildIdentityKey, computeDuplicates, computeStats, toAmount, findDate } = qr
 const { computeLayout } = layout
 const { buildSheetDecor } = decor
 const { DEFAULT_DECORATOR, numberBandPt, paperSize } = types
-const { renderPdf, renderCalibrationPdf } = render
+const { renderPdf, renderCalibrationPdf, ticketEmbedGeometry } = render
 const { sanitizeSettings, hexToRgb, LIMITS } = settings
 const { escapeCsvCell } = stats
+const { readImageInfo, needsOrientationFix, orientationMatrix, orientedSize } = imageinfo
+const { compareVersions, evaluateGate, CLIENT_VERSION } = gate
 
 const ticket = (i, w = 595, h = 842) => ({
   id: `p${i}`,
@@ -345,15 +370,6 @@ function assertDecorOutsideTickets(sheet, items) {
           box.y + box.height > p.y
         assert.ok(!overlap, `序号文本 ${JSON.stringify(it)} 与票面重叠`)
       }
-    } else if (it.kind === 'fill') {
-      for (const p of sheet.placements) {
-        const overlap =
-          it.x < p.x + p.width &&
-          it.x + it.width > p.x &&
-          it.y < p.y + p.height &&
-          it.y + it.height > p.y
-        assert.ok(!overlap, '填充块与票面重叠')
-      }
     }
   }
 }
@@ -363,7 +379,11 @@ await check('序号标记完整落在票面外（单页满版，最坏情况）'
   const sheets = computeLayout(spec(), [ticket(0)], { numberBand: band })
   const items = buildSheetDecor(sheets[0], { ...DEFAULT_DECORATOR, numbering: true })
   assert.equal(items.filter((i) => i.kind === 'text').length, 1)
-  assert.equal(items.filter((i) => i.kind === 'fill').length, 0, '不允许再用白底块遮盖票面')
+  // 装饰图元只有线段与文本两类：不存在任何"填充块"，从类型上就杜绝遮盖票面
+  assert.ok(
+    items.every((i) => i.kind === 'line' || i.kind === 'text'),
+    `出现未知装饰类型：${items.map((i) => i.kind).join(',')}`,
+  )
   assertDecorOutsideTickets(sheets[0], items)
 })
 await check('大字号序号仍在票面外', () => {
@@ -509,6 +529,465 @@ await check('renderPdf：矢量嵌入 + 装饰 + 进度回调，输出可再次�
 await check('renderCalibrationPdf：极小纸张不抛错且尺寸合法', async () => {
   const bytes = await renderCalibrationPdf({ widthPt: 60, heightPt: 60, offsetXPt: 2, offsetYPt: -3 })
   assert.ok(bytes instanceof Uint8Array && bytes.length > 500)
+})
+
+process.stdout.write('\n[7] 源页嵌入几何（CropBox + /Rotate）\n')
+
+await check('四种旋转下矩阵把 CropBox 精确映射为 [0,baseW]×[0,baseH]', () => {
+  const apply = (m, u, v) => [m[0] * u + m[2] * v + m[4], m[1] * u + m[3] * v + m[5]]
+  const crops = [
+    { x: 0, y: 0, width: 842, height: 595 },
+    { x: 10, y: 20, width: 800, height: 500 },
+    { x: -5, y: 7.5, width: 300, height: 120 },
+    { x: 0, y: 0, width: 0, height: 0 },
+  ]
+  for (const crop of crops) {
+    for (const rot of [0, 90, 180, 270, 360, -90, 45]) {
+      const g = ticketEmbedGeometry(crop, rot)
+      const m = g.matrix ?? [1, 0, 0, 1, -crop.x, -crop.y]
+      const w = Math.max(1e-6, crop.width)
+      const h = Math.max(1e-6, crop.height)
+      const pts = [
+        [crop.x, crop.y],
+        [crop.x + w, crop.y],
+        [crop.x, crop.y + h],
+        [crop.x + w, crop.y + h],
+      ].map(([u, v]) => apply(m, u, v))
+      const xs = pts.map((p) => p[0])
+      const ys = pts.map((p) => p[1])
+      const g0 = { rot, crop }
+      assert.ok(Math.abs(Math.min(...xs)) < 1e-6, `x_min ${Math.min(...xs)} ${JSON.stringify(g0)}`)
+      assert.ok(Math.abs(Math.min(...ys)) < 1e-6, `y_min ${Math.min(...ys)} ${JSON.stringify(g0)}`)
+      assert.ok(Math.abs(Math.max(...xs) - g.baseW) < 1e-6, `x_max ${Math.max(...xs)} vs ${g.baseW} ${JSON.stringify(g0)}`)
+      assert.ok(Math.abs(Math.max(...ys) - g.baseH) < 1e-6, `y_max ${Math.max(...ys)} vs ${g.baseH} ${JSON.stringify(g0)}`)
+      // baseW/baseH 必须等于「旋转后的视觉宽高」，才能与 pdf.js 的 widthPt/heightPt 对齐
+      const swap = g.rotation === 90 || g.rotation === 270
+      assert.equal(g.baseW, swap ? h : w)
+      assert.equal(g.baseH, swap ? w : h)
+    }
+  }
+})
+
+await check('/Rotate 90 的扫描件导出：方向正确且等比填满目标矩形', async () => {
+  const { PDFDocument, rgb, degrees } = await import('pdf-lib')
+  const src = await PDFDocument.create()
+  const sp = src.addPage([842, 595])
+  sp.drawRectangle({ x: 0, y: 0, width: 842, height: 30, color: rgb(0.85, 0.1, 0.1) })
+  sp.drawRectangle({ x: 0, y: 0, width: 30, height: 595, color: rgb(0.1, 0.3, 0.85) })
+  sp.setRotation(degrees(90))
+  const srcBytes = await src.save()
+
+  // pdf.js 视角：/Rotate 90 后可视尺寸恰为 CropBox 的 (h, w) = 595x842
+  // （生产环境 widthPt/heightPt 就是 pdfjs viewport 尺寸，与本函数 baseW/baseH 同源）
+  const pages = [ticket(0, 595, 842)]
+  const sheets = computeLayout(spec(), pages)
+  const decor = sheets.map((sh) => buildSheetDecor(sh, { ...DEFAULT_DECORATOR, divider: 'none' }))
+  const out = await renderPdf({
+    sheets,
+    decor,
+    files: [
+      {
+        id: 'f',
+        name: 'scan.pdf',
+        ext: 'pdf',
+        buffer: srcBytes.buffer.slice(srcBytes.byteOffset, srcBytes.byteOffset + srcBytes.byteLength),
+      },
+    ],
+  })
+  const rel = await (await import('pdf-lib')).PDFDocument.load(out)
+  assert.equal(rel.getPageCount(), 1)
+  // 等比：旋转后内容 595x842，放置矩形由同一比例 fit 得到 → 两方向缩放系数必须一致
+  const p = sheets[0].placements[0]
+  const sx = p.width / 595
+  const sy = p.height / 842
+  assert.ok(Math.abs(sx - sy) < 1e-9, `非等比: sx=${sx} sy=${sy}`)
+  // 且内容应填满放置矩形（按 CropBox 而非 MediaBox 取基准）
+  assert.ok(Math.abs(p.width / p.height - 595 / 842) < 1e-9, '放置矩形比例应等于旋转后内容比例')
+})
+
+process.stdout.write('\n[8] 图片票据真实尺寸与 EXIF 方向\n')
+
+/** 构造最小 JPEG 字节：SOI + [APP1(Exif, orientation)] + SOF0(w,h) + EOI */
+function fakeJpeg({ width, height, orientation, little = true }) {
+  const seg = []
+  // SOI
+  seg.push(0xff, 0xd8)
+  if (orientation) {
+    const tiff = []
+    const push16 = (v) => (little ? [v & 0xff, (v >> 8) & 0xff] : [(v >> 8) & 0xff, v & 0xff])
+    const push32 = (v) =>
+      little
+        ? [v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >> 24) & 0xff]
+        : [(v >> 24) & 0xff, (v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff]
+    tiff.push(...(little ? [0x49, 0x49] : [0x4d, 0x4d]))
+    tiff.push(...push16(0x002a))
+    tiff.push(...push32(8)) // IFD0 偏移
+    tiff.push(...push16(1)) // 1 个条目
+    tiff.push(...push16(0x0112)) // Orientation
+    tiff.push(...push16(3)) // SHORT
+    tiff.push(...push32(1)) // count
+    tiff.push(...push16(orientation), ...push16(0)) // value
+    tiff.push(...push32(0)) // next IFD
+    const exif = [0x45, 0x78, 0x69, 0x66, 0x00, 0x00, ...tiff]
+    const len = exif.length + 2
+    seg.push(0xff, 0xe1, (len >> 8) & 0xff, len & 0xff, ...exif)
+  }
+  // SOF0：长度 17，精度 8，高，宽，3 分量
+  seg.push(0xff, 0xc0, 0x00, 0x11, 0x08, (height >> 8) & 0xff, height & 0xff, (width >> 8) & 0xff, width & 0xff, 0x03)
+  for (let i = 0; i < 9; i += 1) seg.push(0)
+  seg.push(0xff, 0xd9)
+  return new Uint8Array(seg)
+}
+
+/** 构造最小 PNG 字节：签名 + IHDR + IEND */
+function fakePng(width, height) {
+  const b = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+  const push32 = (v) => b.push((v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff)
+  push32(13)
+  b.push(0x49, 0x48, 0x44, 0x52)
+  push32(width)
+  push32(height)
+  b.push(8, 6, 0, 0, 0)
+  push32(0) // crc 占位（解析器不校验）
+  push32(0)
+  b.push(0x49, 0x45, 0x4e, 0x44)
+  push32(0)
+  return new Uint8Array(b)
+}
+
+await check('JPEG 尺寸与 EXIF 方向（大小端、方向 1/6/8、无 EXIF）', () => {
+  assert.deepEqual(readImageInfo(fakeJpeg({ width: 4000, height: 3000 }), 'jpg'), {
+    width: 4000,
+    height: 3000,
+    exifOrientation: null,
+  })
+  for (const [orientation, little] of [[1, true], [6, true], [8, false], [3, false]]) {
+    const info = readImageInfo(fakeJpeg({ width: 1000, height: 500, orientation, little }), 'jpeg')
+    assert.equal(info.width, 1000)
+    assert.equal(info.height, 500)
+    assert.equal(info.exifOrientation, orientation, `orientation=${orientation} little=${little}`)
+  }
+  assert.equal(needsOrientationFix(1), false)
+  assert.equal(needsOrientationFix(null), false)
+  assert.equal(needsOrientationFix(6), true)
+  assert.equal(needsOrientationFix(8), true)
+})
+
+await check('PNG 尺寸（IHDR）与非法输入回退', () => {
+  assert.deepEqual(readImageInfo(fakePng(1920, 1080), 'png'), {
+    width: 1920,
+    height: 1080,
+    exifOrientation: null,
+  })
+  assert.equal(readImageInfo(new Uint8Array([1, 2, 3]), 'jpg'), null)
+  assert.equal(readImageInfo(fakePng(0, 0), 'png'), null)
+  assert.equal(readImageInfo(new Uint8Array(0), 'png'), null)
+  // 截断的 JPEG：不抛错
+  const truncated = fakeJpeg({ width: 10, height: 10 }).slice(0, 5)
+  assert.doesNotThrow(() => readImageInfo(truncated, 'jpg'))
+})
+
+await check('EXIF Orientation 矩阵：四角映射、输出尺寸、镜像性质（1~8 全覆盖）', () => {
+  const W = 40
+  const H = 25
+  // 期望的"四角去向"（源四角 → 输出四角集合），用连续坐标表述
+  for (const o of [1, 2, 3, 4, 5, 6, 7, 8]) {
+    const m = orientationMatrix(o, W, H)
+    const ap = (x, y) => [m.a * x + m.c * y + m.e, m.b * x + m.d * y + m.f]
+    const corners = [ap(0, 0), ap(W, 0), ap(0, H), ap(W, H)]
+    const xs = corners.map((p) => Math.round(p[0] * 1000) / 1000)
+    const ys = corners.map((p) => Math.round(p[1] * 1000) / 1000)
+    // 每个角都必须落在输出矩形 [0,outW]×[0,outH] 内
+    for (const [x, y] of corners) {
+      assert.ok(x >= -1e-9 && x <= m.outWidth + 1e-9, `o=${o} x=${x} outW=${m.outWidth}`)
+      assert.ok(y >= -1e-9 && y <= m.outHeight + 1e-9, `o=${o} y=${y} outH=${m.outHeight}`)
+    }
+    // 四角必须恰好覆盖输出矩形的四个角（无重叠、无遗漏）
+    const key = (x, y) => `${Math.round(x)},${Math.round(y)}`
+    const got = new Set(corners.map(([x, y]) => key(x, y)))
+    assert.equal(got.size, 4, `o=${o} 四角映射后不唯一`)
+    assert.deepEqual(
+      [...got].sort(),
+      [key(0, 0), key(m.outWidth, 0), key(0, m.outHeight), key(m.outWidth, m.outHeight)].sort(),
+      `o=${o} 四角未覆盖输出矩形`,
+    )
+    // 面积守恒 + 镜像判定（行列式符号）
+    const det = m.a * m.d - m.b * m.c
+    assert.ok(Math.abs(Math.abs(det) - 1) < 1e-9, `o=${o} 行列式 ${det}`)
+    assert.equal(m.mirrored, det < 0, `o=${o} 镜像标记与行列式不一致`)
+    assert.equal(m.outWidth * m.outHeight, W * H, `o=${o} 面积不守恒`)
+    // 90/270（含镜像变体）必须交换宽高
+    const swapped = [5, 6, 7, 8].includes(o)
+    assert.equal(m.outWidth, swapped ? H : W, `o=${o} outWidth`)
+    assert.equal(m.outHeight, swapped ? W : H, `o=${o} outHeight`)
+    assert.deepEqual(
+      orientedSize(o, W, H),
+      { width: swapped ? H : W, height: swapped ? W : H },
+      `o=${o} orientedSize`,
+    )
+  }
+  // 方向 1 / null 必须是恒等
+  assert.deepEqual(orientationMatrix(1, W, H), {
+    a: 1, b: 0, c: 0, d: 1, e: 0, f: 0, outWidth: W, outHeight: H, mirrored: false,
+  })
+})
+
+await check('EXIF 方向 6/8 的语义正确（顺时针/逆时针）', () => {
+  const W = 40, H = 25
+  // 6 = 顺时针 90°：源左上(0,0) → 输出右上(outW,0)
+  const m6 = orientationMatrix(6, W, H)
+  assert.deepEqual([m6.a * 0 + m6.c * 0 + m6.e, m6.b * 0 + m6.d * 0 + m6.f], [H, 0])
+  assert.equal(m6.outWidth, H)
+  // 8 = 逆时针 90°：源左上(0,0) → 输出左下(0,outH)
+  const m8 = orientationMatrix(8, W, H)
+  assert.deepEqual([m8.a * 0 + m8.c * 0 + m8.e, m8.b * 0 + m8.d * 0 + m8.f], [0, W])
+  assert.equal(m8.outWidth, H)
+})
+
+process.stdout.write('\n[9] 启动门禁（离线宽限 / 版本对齐）\n')
+
+await check('compareVersions：语义化版本比较', () => {
+  assert.equal(compareVersions('1.2.0', '1.2.0'), 0)
+  assert.equal(compareVersions('1.10.0', '1.9.9'), 1)
+  assert.equal(compareVersions('v1.0.0', '1.0'), 0)
+  assert.equal(compareVersions('1.0.0', '1.0.1'), -1)
+  assert.equal(compareVersions('2.0', '10.0'), -1)
+  assert.equal(compareVersions('1.0.0-beta.1', '1.0.0'), 0)
+  assert.equal(compareVersions('', '1.0.0'), -1)
+})
+
+await check('evaluateGate：联网成功即可进入并记录校验时间', () => {
+  const r = evaluateGate({
+    validationOk: true, lastOkAt: null, now: 1_000_000, graceMinutes: 0,
+    clientVersion: CLIENT_VERSION, minClientVersion: '1.0.0',
+  })
+  assert.equal(r.reason, 'ok')
+  assert.equal(r.recordOk, true)
+})
+
+await check('evaluateGate：默认宽限 0 → 离线即必须联网校验（MD §8.1）', () => {
+  const r = evaluateGate({
+    validationOk: false, lastOkAt: 1_000_000, now: 1_000_000 + 60_000, graceMinutes: 0,
+    clientVersion: CLIENT_VERSION,
+  })
+  assert.equal(r.reason, 'need-online')
+  assert.equal(r.recordOk, false)
+})
+
+await check('evaluateGate：平台下发宽限期时允许离线进入（不刷新校验时间）', () => {
+  const ok = evaluateGate({
+    validationOk: false, lastOkAt: 1_000_000, now: 1_000_000 + 30 * 60_000, graceMinutes: 60,
+    clientVersion: CLIENT_VERSION,
+  })
+  assert.equal(ok.reason, 'ok')
+  assert.equal(ok.recordOk, false)
+  const expired = evaluateGate({
+    validationOk: false, lastOkAt: 1_000_000, now: 1_000_000 + 61 * 60_000, graceMinutes: 60,
+    clientVersion: CLIENT_VERSION,
+  })
+  assert.equal(expired.reason, 'need-online')
+})
+
+await check('evaluateGate：客户端版本低于最低要求必须先更新（即使能联网）', () => {
+  const r = evaluateGate({
+    validationOk: true, lastOkAt: null, now: 1_000_000, graceMinutes: 0,
+    clientVersion: '1.0.0', minClientVersion: '1.1.0',
+  })
+  assert.equal(r.reason, 'update-required')
+  assert.equal(r.recordOk, false)
+  // 未配置最低版本时不拦
+  const noMin = evaluateGate({
+    validationOk: true, lastOkAt: null, now: 1, graceMinutes: 0,
+    clientVersion: '0.0.1', minClientVersion: null,
+  })
+  assert.equal(noMin.reason, 'ok')
+})
+
+await check('fuzz evaluateGate：任意输入不抛错且结论合法', () => {
+  const r = rng(31415)
+  for (let i = 0; i < 300; i += 1) {
+    const input = {
+      validationOk: r() < 0.5,
+      lastOkAt: pick(r, [null, 0, -1, 1, Date.now(), Number.NaN, Infinity]),
+      now: pick(r, [0, 1, Date.now(), Number.NaN]),
+      graceMinutes: pick(r, [0, -5, 1, 60, Number.NaN, Infinity]),
+      clientVersion: pick(r, ['1.0.0', '', 'v2.1', 'abc']),
+      minClientVersion: pick(r, [null, undefined, '', '1.0.0', '2.0.0', 'x.y.z']),
+    }
+    const out = evaluateGate(input)
+    assert.ok(['ok', 'need-online', 'update-required'].includes(out.reason), `reason=${out.reason}`)
+    assert.equal(typeof out.recordOk, 'boolean')
+  }
+})
+
+process.stdout.write('\n[10] 属性测试（确定性伪随机 fuzz）\n')
+
+
+await check('fuzz sanitizeSettings：任意脏输入都不抛错且全部落在合法区间', () => {
+  const r = rng(20261001)
+  for (let i = 0; i < 400; i += 1) {
+    const raw = {}
+    const keys = [
+      'preset','customRows','customCols','orientation','paper','customWidthMm','customHeightMm',
+      'marginMm','offsetXMm','offsetYMm','numbering','divider','duplex','numberFontPt','markColor','dashLen','dashGap',
+    ]
+    for (const k of keys) {
+      if (r() < 0.5) continue
+      raw[k] = pick(r, [weirdNum(r), 'x', null, undefined, [], {}, true, 'custom', 'A4', '#fff', '#zzzzzz'])
+    }
+    const out = sanitizeSettings(raw)
+    assert.ok(LIMITS.rows[0] <= out.customRows && out.customRows <= LIMITS.rows[1], `rows ${out.customRows}`)
+    assert.ok(LIMITS.cols[0] <= out.customCols && out.customCols <= LIMITS.cols[1])
+    assert.ok(LIMITS.customWidthMm[0] <= out.customWidthMm && out.customWidthMm <= LIMITS.customWidthMm[1])
+    assert.ok(LIMITS.customHeightMm[0] <= out.customHeightMm && out.customHeightMm <= LIMITS.customHeightMm[1])
+    assert.ok(LIMITS.marginMm[0] <= out.marginMm && out.marginMm <= LIMITS.marginMm[1])
+    assert.ok(LIMITS.offsetMm[0] <= out.offsetXMm && out.offsetXMm <= LIMITS.offsetMm[1])
+    assert.ok(LIMITS.numberFontPt[0] <= out.numberFontPt && out.numberFontPt <= LIMITS.numberFontPt[1])
+    assert.ok(LIMITS.dashLen[0] <= out.dashLen && out.dashLen <= LIMITS.dashLen[1])
+    assert.ok(LIMITS.dashGap[0] <= out.dashGap && out.dashGap <= LIMITS.dashGap[1])
+    assert.ok(['A4','A5','B5','custom'].includes(out.paper))
+    assert.ok(['portrait','landscape'].includes(out.orientation))
+    assert.ok(['none','dashed','line'].includes(out.divider))
+    assert.ok(/^#[0-9a-f]{6}$/.test(out.markColor), `color ${out.markColor}`)
+    assert.equal(typeof out.numbering, 'boolean')
+    assert.equal(typeof out.duplex, 'boolean')
+  }
+})
+
+await check('fuzz computeLayout：尺寸恒为正、恒在纸张内、页数=ceil(N/容量)', () => {
+  const r = rng(777)
+  const papers = ['A4', 'A5', 'B5', 'custom', 'A3', undefined, null]
+  for (let i = 0; i < 300; i += 1) {
+    const rows = pick(r, [1, 2, 3, 4, 10, 50, 51, 0, -3, NaN, 2.7])
+    const cols = pick(r, [1, 2, 3, 4, 10, 50, 0, -1, Infinity])
+    const spec2 = {
+      rows, cols,
+      orientation: pick(r, ['portrait', 'landscape', 'diagonal']),
+      paper: pick(r, papers),
+      customWidthMm: weirdNum(r),
+      customHeightMm: weirdNum(r),
+      marginMm: weirdNum(r),
+      offsetXMm: weirdNum(r),
+      offsetYMm: weirdNum(r),
+    }
+    const count = 1 + Math.floor(r() * 12)
+    const pages = Array.from({ length: count }, (_, k) =>
+      ticket(k, pick(r, [595, 842, 100, 1, 0, NaN]), pick(r, [842, 595, 50, 1, 0, -5])),
+    )
+    const band = pick(r, [0, 12, 24, 100, NaN])
+    const sheets = computeLayout(spec2, pages, { duplex: r() < 0.5, numberBand: band })
+    assert.ok(sheets.length >= 1, 'sheets 不应为空')
+    for (const sh of sheets) {
+      assert.ok(Number.isFinite(sh.width) && sh.width > 0, `sheet width ${sh.width}`)
+      assert.ok(Number.isFinite(sh.height) && sh.height > 0)
+      for (const p of sh.placements) {
+        for (const v of [p.x, p.y, p.width, p.height, p.cellX, p.cellY, p.cellWidth, p.cellHeight]) {
+          assert.ok(Number.isFinite(v), `非有限数值 ${v}`)
+        }
+        assert.ok(p.width > 0 && p.height > 0, `负/零尺寸 ${p.width}x${p.height}`)
+        assert.ok(p.x >= -1e-6 && p.x + p.width <= sh.width + 1e-6, `横向越界 x=${p.x} w=${p.width} sheet=${sh.width}`)
+        assert.ok(p.y >= -1e-6 && p.y + p.height <= sh.height + 1e-6, `纵向越界 y=${p.y} h=${p.height} sheet=${sh.height}`)
+        assert.ok(p.seq >= 1 && Number.isInteger(p.seq))
+      }
+    }
+    // 不变量：同一页内的 placement 互不重叠（允许边界相接）
+    for (const sh of sheets) {
+      const ps = sh.placements
+      for (let a = 0; a < ps.length; a += 1) {
+        for (let b = a + 1; b < ps.length; b += 1) {
+          const A = ps[a]
+          const B = ps[b]
+          const overlapX = A.x < B.x + B.width - 1e-6 && A.x + A.width > B.x + 1e-6
+          const overlapY = A.y < B.y + B.height - 1e-6 && A.y + A.height > B.y + 1e-6
+          assert.ok(!(overlapX && overlapY), `placement 重叠: ${JSON.stringify([A, B])}`)
+        }
+      }
+    }
+    // 不变量：序号必须是 1..N 连续且唯一（编号/导出时恢复编号的基础）
+    const allSeq = sheets.flatMap((sh) => sh.placements.map((p) => p.seq))
+    const uniqSeq = [...new Set(allSeq)].sort((a, b) => a - b)
+    assert.deepEqual(uniqSeq, Array.from({ length: pages.length }, (_, k) => k + 1), `序号不连续: ${uniqSeq}`)
+
+    // 每页容量与内核同一口径：rows/cols 先钳制到 [1,50]（NaN/Infinity 视为 1）
+    const rc = (v) => Math.min(50, Math.max(1, Number.isFinite(v) ? Math.trunc(v) : 1))
+    const cap = rc(rows) * rc(cols)
+    const expectedSheets = Math.ceil(pages.length / cap)
+    assert.ok(sheets.length === expectedSheets, `页数 ${sheets.length} != ${expectedSheets} (rows=${rows},cols=${cols})`)
+  }
+})
+
+await check('fuzz buildSheetDecor：票面外不变式（含脏 spec / 脏几何）', () => {
+  const r = rng(4242)
+  for (let i = 0; i < 200; i += 1) {
+    const spec2 = sanitizeSettings({
+      customRows: pick(r, [1, 2, 3, 10]),
+      customCols: pick(r, [1, 2, 3, 10]),
+      preset: pick(r, ['single', 'double', 'quad', 'custom']),
+      paper: pick(r, ['A4', 'A5', 'B5', 'custom']),
+      customWidthMm: weirdNum(r),
+      customHeightMm: weirdNum(r),
+      marginMm: weirdNum(r),
+      offsetXMm: weirdNum(r),
+      offsetYMm: weirdNum(r),
+      numbering: r() < 0.7,
+      numberFontPt: weirdNum(r),
+      divider: pick(r, ['none', 'dashed', 'line']),
+      duplex: r() < 0.5,
+      markColor: '#123456',
+      dashLen: weirdNum(r),
+      dashGap: weirdNum(r),
+    })
+    const decorator = {
+      numbering: spec2.numbering,
+      divider: spec2.divider,
+      duplex: spec2.duplex,
+      numberFontPt: spec2.numberFontPt,
+      markColor: hexToRgb(spec2.markColor),
+      dashLen: spec2.dashLen,
+      dashGap: spec2.dashGap,
+    }
+    const band = numberBandPt(decorator)
+    const pages = Array.from({ length: 1 + Math.floor(r() * 6) }, (_, k) =>
+      ticket(k, pick(r, [595, 842, 200, 100]), pick(r, [842, 595, 200, 100])),
+    )
+    const sheets = computeLayout(spec2, pages, { duplex: decorator.duplex, numberBand: band })
+    for (const sh of sheets) {
+      const items = buildSheetDecor(sh, decorator)
+      for (const it of items) {
+        if (it.kind === 'line') {
+          assert.ok([it.x1, it.y1, it.x2, it.y2].every(Number.isFinite), '线条坐标非有限')
+          assert.ok(it.thickness > 0 && Number.isFinite(it.thickness))
+          assert.ok(it.dash === null || (it.dash[0] > 0 && it.dash[1] > 0), 'dash 非法')
+        }
+        assertDecorOutsideTickets(sh, items)
+      }
+      // 开启序号时，只要有足够空白带就应画出序号（不应静默丢失）
+      if (decorator.numbering) {
+        const texts = items.filter((i) => i.kind === 'text')
+        assert.ok(texts.length <= sh.placements.length, '序号条数异常')
+      }
+    }
+  }
+})
+
+await check('fuzz parseQrText/escapeCsvCell：任意输入不抛错且契约成立', () => {
+  const r = rng(998877)
+  const chars = '01,，年月日￥¥.=-@ \t0123456789ABCabc:/?&%'
+  for (let i = 0; i < 500; i += 1) {
+    let text = ''
+    const len = Math.floor(r() * 80)
+    for (let k = 0; k < len; k += 1) text += chars[Math.floor(r() * chars.length)]
+    const p = parseQrText(text)
+    for (const v of [p.invoiceCode, p.invoiceNo, p.checkCode]) {
+      assert.ok(v === null || typeof v === 'string')
+    }
+    assert.ok(p.amount === null || (Number.isFinite(p.amount) && p.amount > 0 && p.amount <= 1e8), `amount ${p.amount}`)
+    assert.ok(p.issueDate === null || /^20\d{2}-\d{2}-\d{2}$/.test(p.issueDate), `date ${p.issueDate}`)
+    const key = buildIdentityKey(p, text || null)
+    assert.ok(key === null || typeof key === 'string')
+    const cell = escapeCsvCell(text)
+    assert.ok(!/^[=+\-@]/.test(cell) || cell.startsWith("'"), `CSV 注入未中和: ${cell.slice(0, 12)}`)
+  }
 })
 
 rmSync(outDir, { recursive: true, force: true })

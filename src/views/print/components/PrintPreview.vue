@@ -154,9 +154,6 @@ function drawItem(ctx: CanvasRenderingContext2D, it: DecorItem) {
     ctx.lineTo(it.x2, it.y2)
     ctx.stroke()
     ctx.setLineDash([])
-  } else if (it.kind === 'fill') {
-    ctx.fillStyle = cssColor(it.color)
-    ctx.fillRect(it.x, it.y, it.width, it.height)
   } else {
     ctx.fillStyle = cssColor(it.color)
     ctx.font = `${it.size}px Helvetica, Arial, sans-serif`
@@ -205,6 +202,11 @@ async function rebuild() {
 
   generation += 1
   rebuildThumbMap()
+  // 票据减少时当前页可能越界：钳制并通知父组件
+  if (currentIndex.value > props.sheets.length - 1) {
+    currentIndex.value = Math.max(0, props.sheets.length - 1)
+    emit('update:current', currentIndex.value)
+  }
   const els = Array.from(root.querySelectorAll<HTMLElement>('.pv-sheet'))
   // 页面数量变化时释放不再使用的画布
   for (const old of slots) {

@@ -2,9 +2,10 @@
 
 import { ref } from 'vue'
 import * as Comlink from 'comlink'
+import { consumePrintQuota } from '@/api/print'
 import { buildSheetDecor } from '@/lib/print/decor'
 import type { PrintWorkerApi } from '@/workers/print-render.worker'
-import type { DecoratorSpec, PrintLimits, SheetLayout, SourceFile } from '@/lib/print/types'
+import { normalizeLimits, type DecoratorSpec, type PrintLimits, type SheetLayout, type SourceFile } from '@/lib/print/types'
 
 type FilePayload = { id: string; name: string; ext: string; buffer: ArrayBuffer }
 
@@ -21,6 +22,36 @@ let workerBroken = false
 export interface ExportProgress {
   done: number
   total: number
+}
+
+/** 导出/分享结果：status 之外还带回页数与一次性配额令牌，供用量上报核销 */
+export interface ExportOutcome {
+  status: 'saved' | 'cancelled' | 'busy' | 'shared'
+  pages: number
+  quotaToken: string | null
+}
+
+function genRequestId(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
+  return `req_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+}
+
+/**
+ * 导出前申请配额许可（K02）。
+ * - 平台拒绝（超额/未开通）：抛出可读错误，阻止本次导出；
+ * - 网络异常：降级放行（与平台 fail-open 一致），返回 null 令牌。
+ */
+async function requestQuota(pages: number): Promise<string | null> {
+  try {
+    const grant = await consumePrintQuota(pages, genRequestId())
+    return grant.enforced ? grant.token : null
+  } catch (err) {
+    // 业务拒绝（平台明确不给额度）→ 必须中断导出
+    const msg = (err as Error)?.message ?? ''
+    if (/额度|许可|未开通|阈值|频繁/.test(msg)) throw err
+    // 网络/离线等原因：不阻断本地能力，用量上报时按降级处理
+    return null
+  }
 }
 
 function resetWorker() {
@@ -160,8 +191,11 @@ async function persistPdf(bytes: Uint8Array, name: string): Promise<'saved' | 'c
 /** 导出文件名：带时间戳，避免重复导出互相覆盖 */
 function exportName(scope: 'all' | 'current', pages: number): string {
   const d = new Date()
-  const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}`
-  return scope === 'current' ? `发票打印-当前页-${stamp}.pdf` : `发票合并打印-${pages}页-${stamp}.pdf`
+  const p2 = (n: number) => String(n).padStart(2, '0')
+  const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`
+  return scope === 'current'
+    ? `发票打印-当前页-${stamp}.pdf`
+    : `发票合并打印-${pages}页-${stamp}.pdf`
 }
 
 export function usePdfExport(
@@ -172,7 +206,8 @@ export function usePdfExport(
 ) {
   const exporting = ref(false)
   const progress = ref<ExportProgress>({ done: 0, total: 0 })
-  const lastError = ref<string | null>(null)
+  /** 进度回调代理按实例缓存：既避免每次导出新建代理，也不会绑定到已卸载实例的 ref */
+  let progressProxy: ((done: number, total: number) => void) | null = null
 
   /** 只发送本次排版真正用到的文件；已发送过的不再克隆（M3） */
   function buildPayload(sheets: SheetLayout[], force = false): FilePayload[] {
@@ -205,9 +240,9 @@ export function usePdfExport(
           sheets,
           decor,
           buildPayload(sheets, force),
-          Comlink.proxy((done: number, total: number) => {
+          (progressProxy ??= Comlink.proxy((done: number, total: number) => {
             progress.value = { done, total }
-          }),
+          })),
         ),
       )
 
@@ -226,7 +261,7 @@ export function usePdfExport(
 
   function assertExportable(sheetCount: number) {
     if (sheetCount === 0) throw new Error('暂无可导出的内容')
-    const max = getLimits().maxExportPages
+    const max = normalizeLimits(getLimits()).maxExportPages
     if (sheetCount > max) {
       throw new Error(
         `单次导出不能超过 ${max} 页（当前 ${sheetCount} 页），请减少票据或分批导出`,
@@ -237,44 +272,42 @@ export function usePdfExport(
   async function doExport(
     scope: 'all' | 'current',
     currentIndex = 0,
-  ): Promise<'saved' | 'cancelled' | 'busy'> {
-    if (exporting.value) return 'busy'
+  ): Promise<ExportOutcome> {
+    if (exporting.value) return { status: 'busy', pages: 0, quotaToken: null }
     const allSheets = getSheets()
-    const sheets = scope === 'current' ? allSheets.slice(currentIndex, currentIndex + 1) : allSheets
+    // 删除文件后 current 可能已越界：钳制到有效范围，避免"导出当前页"莫名失败
+    const idx = Math.min(Math.max(0, Math.trunc(currentIndex) || 0), Math.max(0, allSheets.length - 1))
+    const sheets = scope === 'current' ? allSheets.slice(idx, idx + 1) : allSheets
     assertExportable(sheets.length)
 
     exporting.value = true
-    lastError.value = null
     try {
+      // 导出前取得配额许可（K02）
+      const quotaToken = await requestQuota(sheets.length)
       const bytes = await renderSheets(sheets)
-      return await persistPdf(bytes, exportName(scope, sheets.length))
-    } catch (err) {
-      lastError.value = (err as Error).message || '导出失败'
-      throw err
+      const status = await persistPdf(bytes, exportName(scope, sheets.length))
+      return { status, pages: sheets.length, quotaToken }
     } finally {
       exporting.value = false
     }
   }
 
   /** 系统分享：把合并 PDF 交给微信/邮件等（不支持的浏览器抛错） */
-  async function sharePdf(): Promise<'shared' | 'busy'> {
-    if (exporting.value) return 'busy'
+  async function sharePdf(): Promise<ExportOutcome> {
+    if (exporting.value) return { status: 'busy', pages: 0, quotaToken: null }
     const sheets = getSheets()
     assertExportable(sheets.length)
 
     exporting.value = true
-    lastError.value = null
     try {
+      const quotaToken = await requestQuota(sheets.length)
       const bytes = await renderSheets(sheets)
       const file = new File([bytes], exportName('all', sheets.length), { type: 'application/pdf' })
       if (!navigator.canShare?.({ files: [file] })) {
         throw new Error('当前浏览器不支持分享文件，请改用「导出合并 PDF」')
       }
       await navigator.share({ files: [file], title: '发票合并打印' })
-      return 'shared'
-    } catch (err) {
-      lastError.value = (err as Error).message || '分享失败'
-      throw err
+      return { status: 'shared', pages: sheets.length, quotaToken }
     } finally {
       exporting.value = false
     }
@@ -289,7 +322,6 @@ export function usePdfExport(
   ): Promise<void> {
     if (exporting.value) return
     exporting.value = true
-    lastError.value = null
     try {
       const bytes = await rpc(
         '校准页生成',
@@ -297,9 +329,6 @@ export function usePdfExport(
         60_000,
       )
       await persistPdf(bytes, exportName('current', 1).replace('当前页', '校准测试页'))
-    } catch (err) {
-      lastError.value = (err as Error).message || '校准页生成失败'
-      throw err
     } finally {
       exporting.value = false
     }
@@ -317,5 +346,5 @@ export function usePdfExport(
     }
   }
 
-  return { exporting, progress, lastError, doExport, sharePdf, printTestPage, releaseFiles }
+  return { exporting, progress, doExport, sharePdf, printTestPage, releaseFiles }
 }

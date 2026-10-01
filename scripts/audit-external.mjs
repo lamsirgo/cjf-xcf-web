@@ -34,7 +34,13 @@ const WARN = new Set([
   'fastly.jsdelivr.net', // zxing-wasm 默认 locateFile，运行期被覆盖为同源 wasm
 ])
 
-const URL_RE = /https?:\/\/([a-zA-Z0-9._-]+)/g
+/**
+ * 外部域检测：显式 http(s) URL，以及**协议相对 URL**（`//host/path`）。
+ * 协议相对必须带定界符并要求后面跟路径/引号，否则会把压缩代码里的
+ * `a//b.c` 之类误判成域名（早期版本还漏掉了 at.alicdn.com 这种写法）。
+ */
+const ABS_URL_RE = /https?:\/\/([a-zA-Z0-9][a-zA-Z0-9._-]*\.[a-zA-Z]{2,})/g
+const PROTO_REL_URL_RE = /(?:["'(=\s,])\/\/([a-zA-Z0-9][a-zA-Z0-9._-]*\.[a-zA-Z]{2,})(?=[/'")?\s,;]|$)/g
 const TEXT_EXT = new Set(['.js', '.mjs', '.cjs', '.html', '.css', '.webmanifest', '.json'])
 
 function walk(dir) {
@@ -54,10 +60,12 @@ const files = walk(distDir)
 for (const file of files) {
   const text = readFileSync(file, 'utf8')
   const hosts = new Map()
-  for (const m of text.matchAll(URL_RE)) {
-    const host = m[1].toLowerCase()
+  const addHost = (h) => {
+    const host = h.toLowerCase()
     hosts.set(host, (hosts.get(host) ?? 0) + 1)
   }
+  for (const m of text.matchAll(ABS_URL_RE)) addHost(m[1])
+  for (const m of text.matchAll(PROTO_REL_URL_RE)) addHost(m[1])
   for (const [host, count] of hosts) {
     const rel = path.relative(distDir, file)
     if (ALLOW.has(host)) continue

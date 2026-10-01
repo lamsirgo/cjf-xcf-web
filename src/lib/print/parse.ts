@@ -17,6 +17,8 @@ export const SUPPORTED_EXTS = ['pdf', 'png', 'jpg', 'jpeg']
 
 export interface ParsedPagePayload extends Omit<TicketPage, 'thumbUrl'> {
   thumb: Blob
+  /** EXIF Orientation（仅图片；用于提示用户"方向信息不会被 PDF 保留"） */
+  exifOrientation?: number | null
 }
 
 export interface ParsedFilePayload {
@@ -118,6 +120,8 @@ export async function parseFile(file: File, forcedId?: string): Promise<SourceFi
       throw new Error(`文件中没有可用页面：${file.name}`)
     }
 
+    const exifOrientation = parsed.pages.find((p) => p.exifOrientation != null)?.exifOrientation ?? null
+
     return {
       id: parsed.id,
       name: parsed.name,
@@ -125,12 +129,26 @@ export async function parseFile(file: File, forcedId?: string): Promise<SourceFi
       size: parsed.size,
       buffer: parsed.buffer,
       pages,
+      exifOrientation,
     }
   } catch (err) {
     // 失败时回收已创建的 objectURL，避免泄漏
     created.forEach((u) => URL.revokeObjectURL(u))
     throw err
   }
+}
+
+/**
+ * 按需渲染一页票据原图（人工校正/复核用）。
+ * 只读取内存中的字节，不发任何网络请求；返回的 blob 由调用方负责 revoke。
+ */
+export async function renderTicketPage(
+  file: Pick<SourceFile, 'buffer' | 'ext'>,
+  sourcePage: number,
+  width = 1400,
+): Promise<Blob> {
+  const api = ensureWorker()
+  return api.renderPage({ buffer: file.buffer, ext: file.ext, sourcePage, width })
 }
 
 /** 释放一个票据文件的缩略图 URL */

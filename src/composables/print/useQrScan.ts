@@ -83,6 +83,8 @@ export interface ManualInput {
   invoiceCode?: string | null
   amount?: number | null
   issueDate?: string | null
+  /** 号码被手工改动时置 true：原校验码不再对应，丢弃而不是继续沿用 */
+  dropCheckCode?: boolean
 }
 
 export interface ScanFailure {
@@ -219,7 +221,15 @@ export function useQrScan(
 
       for (const page of pages) {
         const existing = metaMap.get(page.id)
-        // 已有扫描/补录结果（非未识别）默认跳过；unknown 自动重试
+        // 人工补录/覆盖的结果永不自动覆盖（包括「重新扫描」）：
+        // 否则用户手工校正过的号码/金额会被引擎结果静默回退。
+        // 需要回到引擎结果时，用「清空识别结果」后再扫描。
+        if (existing?.manual) {
+          done += 1
+          progress.value = { done, total: pages.length }
+          continue
+        }
+        // 已有扫描结果（非未识别）默认跳过；unknown 自动重试
         if (!force && existing && existing.status !== 'unknown') {
           done += 1
           progress.value = { done, total: pages.length }
@@ -240,8 +250,10 @@ export function useQrScan(
       const needScan = groups.length > 0
       if (needScan) {
         phase.value = 'engine'
+        // 只预热真正会被用到的 Worker（每个 Worker 都会独立加载 ~1MB wasm）
+        const warmCount = Math.min(workers.length, groups.length)
         await Promise.all(
-          workers.map(async (_entry, i) => {
+          Array.from({ length: warmCount }, async (_v, i) => {
             try {
               await withTimeout(pool[i].api.ready(), ENGINE_TIMEOUT_MS)
             } catch {
@@ -305,7 +317,7 @@ export function useQrScan(
       invoiceNo: invoiceNo || null,
       amount,
       issueDate,
-      checkCode: existing?.checkCode ?? null,
+      checkCode: input.dropCheckCode ? null : (existing?.checkCode ?? null),
       status: invoiceNo ? 'recognized' : hasAny ? 'partial' : 'unknown',
       engine: null,
       manual: true,

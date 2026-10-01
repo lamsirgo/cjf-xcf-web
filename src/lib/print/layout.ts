@@ -12,7 +12,6 @@
 
 import {
   MM_TO_PT,
-  numberBandPt,
   paperSize,
   type LayoutSpec,
   type Placement,
@@ -46,6 +45,32 @@ function clamp(v: number, lo: number, hi: number): number {
 
 function clampInt(v: unknown, lo: number, hi: number): number {
   return clamp(Math.trunc(num(v, lo)), lo, hi)
+}
+
+/**
+ * 校准偏移的安全范围（mm）。
+ *
+ * 不变量：整体网格（含票面外的序号带）必须仍落在纸张内。
+ * 内容盒为 [margin+band, 纸张−margin−band]，因此偏移量最多只能取 ±(margin+band)；
+ * 否则最后一行的票据会被纸张边界裁掉（打印后票面缺失）。
+ * 测试页与排版共用本函数，保证「测到的偏移」与「实际生效的偏移」一致。
+ */
+export function clampOffsets(
+  spec: LayoutSpec,
+  numberBandPt = 0,
+): { xMm: number; yMm: number } {
+  const base = paperSize(spec)
+  const portrait = spec.orientation !== 'landscape'
+  const sheetWmm = portrait ? base.widthMm : base.heightMm
+  const sheetHmm = portrait ? base.heightMm : base.widthMm
+  const maxMarginMm = Math.max(0, Math.min(sheetWmm, sheetHmm) / 2 - 1 / MM_TO_PT)
+  const marginMm = clamp(num(spec.marginMm, 0), 0, maxMarginMm)
+  const bandMm = Math.max(0, num(numberBandPt, 0)) / MM_TO_PT
+  const limit = Math.min(MAX_OFFSET_MM, Math.max(0, marginMm + bandMm))
+  return {
+    xMm: clamp(num(spec.offsetXMm, 0), -limit, limit),
+    yMm: clamp(num(spec.offsetYMm, 0), -limit, limit),
+  }
 }
 
 /** 把 (pageW×pageH) 等比 fit 进 (boxX,boxY,boxW,boxH)，居中。保证结果恒为正。 */
@@ -93,9 +118,6 @@ export function computeLayout(
   // 页边距上限：短边一半再留 1pt，避免单元格宽度/高度非正
   const maxMarginPt = Math.max(0, Math.min(sheetWidth, sheetHeight) / 2 - 1)
   const margin = clamp(num(spec.marginMm, 0), 0, maxMarginPt / MM_TO_PT) * MM_TO_PT
-  // 校准偏移：整体网格平移
-  const offsetX = clamp(num(spec.offsetXMm, 0), -MAX_OFFSET_MM, MAX_OFFSET_MM) * MM_TO_PT
-  const offsetY = clamp(num(spec.offsetYMm, 0), -MAX_OFFSET_MM, MAX_OFFSET_MM) * MM_TO_PT
 
   const cellWidth = Math.max(1, (sheetWidth - margin * 2) / cols)
   const cellHeight = Math.max(1, (sheetHeight - margin * 2) / rows)
@@ -103,6 +125,11 @@ export function computeLayout(
   // 序号带：不超过单元格的四分之一，票面仍有足够空间
   const requestedBand = Math.max(0, num(options.numberBand, 0))
   const band = clamp(requestedBand, 0, Math.min(cellWidth, cellHeight) / 4)
+
+  // 校准偏移：整体网格平移，但必须仍让内容留在纸张内（否则打印时被裁掉）
+  const off = clampOffsets(spec, band)
+  const offsetX = off.xMm * MM_TO_PT
+  const offsetY = off.yMm * MM_TO_PT
   const boxW = Math.max(1, cellWidth - band * 2)
   const boxH = Math.max(1, cellHeight - band * 2)
   const capacity = rows * cols
@@ -164,9 +191,4 @@ export function computeLayout(
 
   if (placements.length > 0) flush()
   return sheets
-}
-
-/** 供调用方（页面/预览）取序号带宽度，保证「排版内缩」与「装饰绘制」用同一口径。 */
-export function layoutNumberBand(decor: Pick<Parameters<typeof numberBandPt>[0], 'numbering' | 'numberFontPt'>): number {
-  return numberBandPt(decor)
 }

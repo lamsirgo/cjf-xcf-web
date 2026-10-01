@@ -13,7 +13,7 @@
         class="mp-item"
         @click="startEdit(item.meta.pageId)"
       >
-        <img :src="item.page.thumbUrl" class="mp-thumb" alt="" />
+        <img :src="item.page.thumbUrl" class="mp-thumb" alt="" loading="lazy" decoding="async" />
         <div class="mp-meta">
           <div class="mp-name">{{ item.meta.invoiceNo || item.fileName }}</div>
           <div class="mp-sub">
@@ -23,6 +23,9 @@
             <span v-if="item.meta.amount !== null">¥{{ fmt(item.meta.amount ?? 0) }}</span>
           </div>
         </div>
+        <span class="mp-ops" @click.stop="emit('viewOriginal', item.meta.pageId)">
+          <van-icon name="eye-o" />原图
+        </span>
         <van-button size="small" type="primary" plain>补录</van-button>
       </div>
     </template>
@@ -34,7 +37,12 @@
         <span>人工补录</span>
       </div>
 
-      <img :src="thumbOf(editing)" class="mp-form-thumb" alt="" />
+      <div class="mp-form-thumb-wrap">
+        <img :src="thumbOf(editing)" class="mp-form-thumb" alt="" loading="lazy" decoding="async" />
+        <van-button size="mini" plain type="primary" @click="emit('viewOriginal', editing)">
+          <van-icon name="eye-o" /> 查看原图（核对号码/金额）
+        </van-button>
+      </div>
 
       <van-cell-group inset>
         <van-field
@@ -106,9 +114,12 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'save', pageId: string, input: ManualInput): void
+  (e: 'viewOriginal', pageId: string): void
 }>()
 
 const editing = ref<string | null>(null)
+/** 进入编辑时的原始号码：用于判断保存时是否改过号码 */
+const originalNo = ref('')
 const showDatePicker = ref(false)
 const datePickerVal = ref<string[]>([])
 
@@ -126,6 +137,8 @@ watch(
   () => props.activeId,
   (id) => {
     if (id) startEdit(id)
+    // 面板关闭（activeId 复位）时退出编辑态，避免下次打开停留在上一次的表单
+    else editing.value = null
   },
   { immediate: true },
 )
@@ -137,6 +150,8 @@ function startEdit(pid: string) {
   form.amount = m?.amount !== null && m?.amount !== undefined ? String(m.amount) : ''
   form.issueDate = m?.issueDate ?? ''
   editing.value = pid
+  // 记录进入编辑时的号码：保存时若号码被改过，则丢弃原二维码校验码（不再可信）
+  originalNo.value = m?.invoiceNo ?? ''
 }
 
 function thumbOf(pid: string) {
@@ -177,6 +192,8 @@ function onSave() {
     invoiceCode: form.invoiceCode.trim() || null,
     amount: amountVal,
     issueDate: form.issueDate || null,
+    // 号码被改动后，原二维码解析出的校验码与号码不再对应，必须丢弃
+    dropCheckCode: trimmedNo !== originalNo.value,
   })
   editing.value = null
 }
@@ -247,6 +264,20 @@ function fmt(n: number) {
   font-size: 15px;
   font-weight: 600;
   color: var(--van-text-color, #323233);
+}
+.mp-form-thumb-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.mp-ops {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--van-primary-color);
+  margin-right: 4px;
 }
 .mp-form-thumb {
   display: block;

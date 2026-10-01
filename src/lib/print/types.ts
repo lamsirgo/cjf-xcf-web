@@ -163,6 +163,8 @@ export interface SourceFile {
   /** 原始字节（矢量嵌入 / 图片嵌入用） */
   buffer: ArrayBuffer
   pages: TicketPage[]
+  /** 图片票据的 EXIF Orientation（1~8；null=无/非图片）——PDF 不会保留该方向信息 */
+  exifOrientation?: number | null
   /** 运行时字段：原始 File（IndexedDB 草稿保存用，内核计算不读取） */
   origFile?: File
 }
@@ -208,4 +210,20 @@ export const FALLBACK_LIMITS: PrintLimits = {
   maxFileSizeMb: 20,
   maxTotalSizeMb: 200,
   maxExportPages: 300,
+}
+
+/**
+ * 阈值兜底：平台配置缺失/为 0/NaN/负数时回退内置默认值。
+ * 这是全应用唯一的阈值规范化入口（导入校验、导出页数上限都必须先过这里），
+ * 避免出现「0 或 NaN 被当成无上限」。
+ */
+export function normalizeLimits(raw: Partial<PrintLimits> | null | undefined): PrintLimits {
+  const pick = (v: unknown, fallback: number) =>
+    typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : fallback
+  return {
+    maxFiles: pick(raw?.maxFiles, FALLBACK_LIMITS.maxFiles),
+    maxFileSizeMb: pick(raw?.maxFileSizeMb, FALLBACK_LIMITS.maxFileSizeMb),
+    maxTotalSizeMb: pick(raw?.maxTotalSizeMb, FALLBACK_LIMITS.maxTotalSizeMb),
+    maxExportPages: pick(raw?.maxExportPages, FALLBACK_LIMITS.maxExportPages),
+  }
 }

@@ -11,7 +11,7 @@
       </div>
 
       <div v-for="pid in g.pageIds" :key="pid" class="dd-item">
-        <img :src="thumbOf(pid)" class="dd-thumb" alt="" />
+        <img :src="thumbOf(pid)" class="dd-thumb" alt="" loading="lazy" decoding="async" />
         <div class="dd-meta">
           <div class="dd-no">
             {{ props.metaOf(pid)?.invoiceNo || '无号码' }}
@@ -25,6 +25,9 @@
           </div>
           <div class="dd-ops">
             <van-tag plain :type="roleType(pid, g)">{{ roleLabel(pid, g) }}</van-tag>
+            <van-button size="mini" plain @click="emit('viewOriginal', pid)">
+              <van-icon name="eye-o" />原图
+            </van-button>
             <van-button size="mini" plain @click="emit('edit', pid)">补录</van-button>
             <van-button
               size="mini"
@@ -54,6 +57,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'toggleIgnore', pageId: string): void
   (e: 'edit', pageId: string): void
+  (e: 'viewOriginal', pageId: string): void
 }>()
 
 function thumbOf(pid: string) {
