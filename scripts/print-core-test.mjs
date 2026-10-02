@@ -172,6 +172,28 @@ await check('数电票位序：01,20位号码,金额,日期', () => {
   assert.equal(p.amount, 1234.56)
   assert.equal(p.issueDate, '2024-03-12')
 })
+await check('数电票国标（2024 全国推广）：01,32,,20位号码,金额,日期,,随机码（真实票面原文）', () => {
+  // 用户真实数电普票（代码字段为空，连续逗号）
+  const p = parseQrText('01,32,,26447000001243494438,285.92,20260619,,300A ')
+  assert.equal(p.invoiceNo, '26447000001243494438')
+  assert.equal(p.invoiceCode, null)
+  assert.equal(p.amount, 285.92)
+  assert.equal(p.issueDate, '2026-06-19')
+  assert.equal(p.checkCode, null)
+})
+await check('数电专票变体 31 + 带校验码位置也不串位', () => {
+  const p = parseQrText('01,31,,24117000000123133001,476.6,20260131,,7001')
+  assert.equal(p.invoiceNo, '24117000000123133001')
+  assert.equal(p.amount, 476.6)
+  assert.equal(p.issueDate, '2026-01-31')
+})
+await check('数电国标重复票：同号同日同额判重，号码相同但金额不同不误判', () => {
+  const a = parseQrText('01,32,,26447000001243494438,285.92,20260619,,300A')
+  const b = parseQrText('01,32,,26447000001243494438,285.92,20260619,,300B')
+  const c = parseQrText('01,32,,26447000001243494438,999.00,20260619,,300C')
+  assert.equal(buildIdentityKey(a, null), buildIdentityKey(b, null))
+  assert.notEqual(buildIdentityKey(a, null), buildIdentityKey(c, null))
+})
 await check('字段化文本：价税合计带千分位不再只取整数首位', () => {
   const p = parseQrText('发票号码:24312000000012345678 价税合计（小写）￥1,234.56 开票日期：2024年03月12日')
   assert.equal(p.invoiceNo, '24312000000012345678')

@@ -15,6 +15,7 @@ import {
   orientationMatrix,
   readImageInfo,
 } from '@/lib/print/imageinfo'
+import { createPdfjsWorkerLoadParams } from '@/lib/print/pdfjs-worker-doc'
 import type { ParsedFilePayload, ParsedPagePayload } from '@/lib/print/parse'
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl as string
@@ -37,9 +38,11 @@ async function thumbBlobFromCanvas(canvas: OffscreenCanvas): Promise<Blob> {
 
 async function decodePdf(id: string, fileName: string, buffer: ArrayBuffer): Promise<ParsedPagePayload[]> {
   // 传副本：pdfjs 会接管（transfer）传入数据，原始 buffer 必须保留给导出时矢量嵌入
-  // pdfjs 6 已移除 eval/new Function 路径（构建产物中零命中，见 scripts/audit-external.mjs），
-  // 因此处理不可信 PDF 时不需要 CSP 的 unsafe-eval。
-  const task = getDocument({ data: new Uint8Array(buffer.slice(0)) })
+  // pdfjs 锁定 5.4.x：6.x 起使用 Chrome 144+ 才有的 Map.getOrInsertComputed，
+  // 旧内核用户全量解析失败。5.x 残留的 new Function 仅在 PS 阴影编译路径，
+  // 受 isEvalSupported 守卫，CSP 无 unsafe-eval 时自动回退（见 audit-external.mjs）。
+  // Worker 内无 document：参数工厂按字体能力切换 FontFace / 矢量字形回退。
+  const task = getDocument(createPdfjsWorkerLoadParams(new Uint8Array(buffer.slice(0))))
   const pdf = await task.promise
   const pages: ParsedPagePayload[] = []
   try {
@@ -207,7 +210,7 @@ export interface RenderPageArgs {
 async function renderPage(args: RenderPageArgs): Promise<Blob> {
   const width = Math.min(2400, Math.max(200, Math.round(args.width) || 1200))
   if (args.ext === 'pdf') {
-    const task = getDocument({ data: new Uint8Array(args.buffer.slice(0)) })
+    const task = getDocument(createPdfjsWorkerLoadParams(new Uint8Array(args.buffer.slice(0))))
     const pdf = await task.promise
     try {
       const page = await pdf.getPage(args.sourcePage + 1)

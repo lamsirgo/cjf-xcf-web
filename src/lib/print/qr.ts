@@ -9,6 +9,9 @@
  *   会把「发票号码」当金额、把 20 位「校验码」当发票号码，故必须按位序严格识别。
  * - 国标无票种码变体：`01,发票代码,发票号码,金额,日期[,校验码]`
  * - 数电票（全电票）：`01,20位号码,金额,日期` 或带 `fphm=/je=/kprq=` 的 URL、字段化文本
+ * - 数电票国标（2024-12 全国推广；票种 31=专票 32=普票，动态二维码）：
+ *   `01,票种(2位),,20位号码,金额,日期,,随机码` —— 发票代码字段为空（连续逗号），
+ *   金额在第 5 段。老解析器三个分支都匹配不到，号码能靠兜底捞到、金额必丢。
  * - 火车票等无法解析要素的票据：退化为「二维码原文指纹」参与去重
  *
  * 所有正则都不使用 lookbehind（Safari 16.4 以下会在解析期抛 SyntaxError，导致整个模块不可用）。
@@ -130,6 +133,21 @@ function parseDelimited(text: string): ParsedInvoice | null {
     out.invoiceNo = segs[3]
     out.amount = toAmount(segs[4])
     out.issueDate = normalizeCompactDate(segs[5])
+    out.checkCode = checksum(segs[6])
+    return out
+  }
+
+  // D. 数电票国标：01,票种(2位),空代码,20位号码,金额,日期,空校验码,随机码
+  //    票种 31/32 等只验形态（2 位数字），不写死；代码段必须为空，号码必须独立 20 位。
+  if (
+    /^\d{2}$/.test(segs[1] ?? '') &&
+    (segs[2] ?? '') === '' &&
+    /^\d{20}$/.test(segs[3] ?? '')
+  ) {
+    out.invoiceNo = segs[3]
+    out.amount = toAmount(segs[4])
+    out.issueDate =
+      normalizeCompactDate(segs[5]) ?? findDate(segs.slice(3).join(' '))
     out.checkCode = checksum(segs[6])
     return out
   }

@@ -22,6 +22,7 @@ import {
 } from 'pdfjs-dist'
 import { prepareZXingModule, readBarcodes } from 'zxing-wasm/reader'
 import { SCAN_BUFFER_MISSING } from '@/lib/print/types'
+import { createPdfjsWorkerLoadParams } from '@/lib/print/pdfjs-worker-doc'
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import zxingWasmUrl from 'zxing-wasm/reader/zxing_reader.wasm?url'
 
@@ -178,7 +179,8 @@ async function getCachedPdf(docId: string, buffer: ArrayBuffer): Promise<PDFDocu
     pdfCache.set(docId, hit)
     return hit.pdf
   }
-  const task = getDocument({ data: new Uint8Array(buffer.slice(0)) })
+  // Worker 内无 document：参数工厂按字体能力切换 FontFace / 矢量字形回退
+  const task = getDocument(createPdfjsWorkerLoadParams(new Uint8Array(buffer.slice(0))))
   const pdf = await task.promise
   pdfCache.set(docId, { task, pdf })
   if (pdfCache.size > PDF_CACHE_SIZE) {
@@ -229,7 +231,7 @@ async function renderPdfPage(
     return rasterizePage(pdf, sourcePage)
   }
   // 无 docId（兼容路径）：用完即毁
-  const task = getDocument({ data: new Uint8Array(buffer.slice(0)) })
+  const task = getDocument(createPdfjsWorkerLoadParams(new Uint8Array(buffer.slice(0))))
   try {
     const pdf = await task.promise
     return await rasterizePage(pdf, sourcePage)

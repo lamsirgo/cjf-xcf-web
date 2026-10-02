@@ -81,18 +81,45 @@ for (const file of files) {
 
 // ② 动态求值审计：CSP 未开 'unsafe-eval'，产物里不允许出现 eval / new Function
 const EVAL_RE = /(^|[^.\w$])eval\s*\(|new\s+Function\s*\(/
+/**
+ * 已知安全片段豁免（精确字符串，非文件级白名单）。
+ *
+ * pdfjs 5.4.x（锁定版本，6.x 起依赖 Chrome 144+ 的 Map.getOrInsertComputed）
+ * 残留两处 new Function，均不可利用：
+ * 1. FeatureTest 能力探测 `new Function("")`：CSP 下直接抛错被 catch，
+ *    isEvalSupported 恒为 false；
+ * 2. PostScript 阴影编译器 `new Function("src",...)`：外层以
+ *    isEvalSupported 为前置条件，探测失败时该分支不可达，回退 JS 解释器。
+ * 用「移除已知片段后再检测」的方式放行：pdfjs 若升级引入任何新的
+ * eval/new Function 用法，仍会命中并中止发布。
+ */
+const SAFE_EVAL_SNIPPETS = [
+  'new Function("")',
+  'new Function("src","srcOffset","dest","destOffset",',
+]
 let evalHits = 0
+let exemptedHits = 0
 for (const file of files) {
   if (!/\.(m?js)$/.test(file)) continue
-  const text = readFileSync(file, 'utf8')
+  let text = readFileSync(file, 'utf8')
+  for (const snippet of SAFE_EVAL_SNIPPETS) {
+    const n = text.split(snippet).length - 1
+    if (n > 0) {
+      exemptedHits += n
+      text = text.split(snippet).join('"__safe_eval_exempted__"')
+    }
+  }
   if (EVAL_RE.test(text)) {
     evalHits += 1
     console.error(`  FAIL  ${path.relative(distDir, file)}: 命中动态求值（eval / new Function）`)
   }
 }
+if (exemptedHits > 0) {
+  console.log(`  info  pdfjs 已知安全片段豁免 ${exemptedHits} 处（FeatureTest 探测 / PS 编译器，CSP 下不可达）`)
+}
 
 console.log(
-  `外部域审计：扫描 ${files.length} 个产物文件，禁止项 ${denyHits}，提醒项 ${warnHits}；动态求值命中 ${evalHits}`,
+  `外部域审计：扫描 ${files.length} 个产物文件，禁止项 ${denyHits}，提醒项 ${warnHits}；动态求值命中 ${evalHits}（豁免 ${exemptedHits}）`,
 )
 if (denyHits > 0 || evalHits > 0) {
   console.error(
