@@ -38,7 +38,7 @@ html.van-theme-dark .sec-link,
 html.van-theme-dark .task-sub,
 html.van-theme-dark .pkg-sub,
 html.van-theme-dark .q-label,
-html.van-theme-dark .q-foot,
+html.van-theme-dark .q-hint,
 html.van-theme-dark .empty,
 html.van-theme-dark .f-name,
 html.van-theme-dark .stat-label {
@@ -107,4 +107,21 @@ html.van-theme-dark .inv-side-panel .panel-close { color: #a0a0a0 !important; }
   .van-popup--round.van-popup--bottom {
     border-radius: 16px 16px 0 0;
   }
+}
+
+/* ============ PC 工作台：深色模式兜底（≥1024px） ============ */
+@media (min-width: 1024px) {
+  html.van-theme-dark .task-list {
+    background: #2a2a2a !important;
+    border-color: #3a3a3a !important;
+  }
+  html.van-theme-dark .task-list .task-card {
+    background: transparent !important;
+    border-top-color: #3a3a3a;
+  }
+  html.van-theme-dark .task-list .task-card:hover { background: #3a3a3a !important; }
+  html.van-theme-dark .tdesc { color: #a0a0a0; }
+  html.van-theme-dark .task-ico { background: #1a3a5c; color: #409eff; }
+  html.van-theme-dark .task-ico-img { background: #14361f; color: #42c07e; }
+  html.van-theme-dark .task-ico-file { background: #3a3a3a; color: #c0c0c0; }
 }

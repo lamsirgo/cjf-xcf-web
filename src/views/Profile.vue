@@ -1,45 +1,53 @@
 <template>
-  <div class="page">
-    <van-nav-bar title="我的" />
+  <div class="page pc-container">
+    <van-nav-bar title="我的" class="m-nav" />
 
-    <div class="user-card">
-      <span class="avatar"><van-icon name="user-o" /></span>
-      <div class="user-meta">
-        <span class="user-name">{{ maskedMobile }}</span>
-        <van-tag plain type="primary">普通用户</van-tag>
+    <h2 class="pc-head">我的</h2>
+
+    <div class="prof-account">
+      <p class="pc-label">账户信息</p>
+      <div class="user-card">
+        <span class="avatar"><van-icon name="user-o" /></span>
+        <div class="user-meta">
+          <span class="user-name">{{ maskedMobile }}</span>
+          <van-tag plain type="primary">普通用户</van-tag>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat">
+          <span class="stat-num">{{ auth.user?.quota_balance ?? '-' }}</span>
+          <span class="stat-label">剩余额度(次)</span>
+        </div>
+        <div class="stat">
+          <span class="stat-num">{{ totalInvoices }}</span>
+          <span class="stat-label">累计识别(张)</span>
+        </div>
+      </div>
+
+      <div v-if="lowQuota" class="quota-alert">
+        <van-icon name="warning-o" /> 额度不足 {{ auth.user?.quota_balance }} 次，请联系管理员充值
       </div>
     </div>
 
-    <div class="stat-card">
-      <div class="stat">
-        <span class="stat-num">{{ auth.user?.quota_balance ?? '-' }}</span>
-        <span class="stat-label">剩余额度(次)</span>
+    <div class="prof-settings">
+      <p class="pc-label">设置</p>
+      <van-cell-group inset class="settings-group">
+        <van-cell title="深色模式">
+          <template #right-icon>
+            <van-switch :model-value="dark" size="20px" @update:model-value="toggleDark()" />
+          </template>
+        </van-cell>
+        <van-cell title="账号与安全" is-link @click="openSecurity" />
+        <van-cell title="额度流水" is-link @click="router.push('/quota-logs')" />
+        <van-cell title="我的导出" is-link @click="showExport = true" />
+        <van-cell title="联系客服" is-link @click="showToast('客服功能即将上线')" />
+        <van-cell title="关于平台" is-link @click="showAbout = true" />
+      </van-cell-group>
+
+      <div class="logout-wrap">
+        <van-button block round type="danger" plain @click="onLogout">退出登录</van-button>
       </div>
-      <div class="stat">
-        <span class="stat-num">{{ totalInvoices }}</span>
-        <span class="stat-label">累计识别(张)</span>
-      </div>
-    </div>
-
-    <div v-if="lowQuota" class="quota-alert">
-      <van-icon name="warning-o" /> 额度不足 {{ auth.user?.quota_balance }} 次，请联系管理员充值
-    </div>
-
-    <van-cell-group inset style="margin-top: 12px">
-      <van-cell title="深色模式">
-        <template #right-icon>
-          <van-switch :model-value="dark" size="20px" @update:model-value="toggleDark()" />
-        </template>
-      </van-cell>
-      <van-cell title="账号与安全" is-link @click="openSecurity" />
-      <van-cell title="额度流水" is-link @click="router.push('/quota-logs')" />
-      <van-cell title="我的导出" is-link @click="showExport = true" />
-      <van-cell title="联系客服" is-link @click="showToast('客服功能即将上线')" />
-      <van-cell title="关于平台" is-link @click="showAbout = true" />
-    </van-cell-group>
-
-    <div style="margin: 24px 16px">
-      <van-button block round type="danger" plain @click="onLogout">退出登录</van-button>
     </div>
 
     <van-popup v-model:show="showSecurity" round position="bottom">
@@ -383,13 +391,90 @@ html.van-theme-dark .quota-alert {
 .about p { margin: 4px 0; }
 .about-name { font-size: 15px; font-weight: 600; color: var(--van-text-color, #323233); }
 
-/* ---------- PC 适配：内容限宽居中 ---------- */
+/* ---------- PC 专用元素：移动端隐藏 ---------- */
+.pc-head,
+.pc-label { display: none; }
+/* 设置组沿用原内联间距；退出按钮沿用原外边距 */
+.settings-group { margin-top: 12px; }
+.logout-wrap { margin: 24px 16px; }
+
+/* ---------- PC 适配：单列满宽，区块 100% 拉伸 ---------- */
 @media (min-width: 1024px) {
-  .page { max-width: 720px; margin: 0 auto; padding-left: 0; padding-right: 0; }
-  .page .user-card,
-  .page .stat-card,
-  .page .quota-alert { margin-left: 0; margin-right: 0; }
-  .page :deep(.van-cell-group--inset) { margin-left: 0; margin-right: 0; }
-  .page > div[style*="margin: 24px 16px"] { margin-left: 0 !important; margin-right: 0 !important; }
+  .page {
+    /* 覆盖全局 .pc-container 的 1080px 限宽，与工作台一致满宽 */
+    max-width: none;
+    margin: 0;
+    padding: 26px 32px 40px;
+    box-sizing: border-box;
+  }
+
+  /* PC 有左侧常驻导航，隐藏页内 NavBar，改用大号页标题 */
+  .m-nav { display: none; }
+  .pc-head {
+    display: block;
+    margin: 4px 0 18px;
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--van-text-color, #323233);
+  }
+
+  .prof-account,
+  .prof-settings { min-width: 0; }
+  .prof-account { display: flex; flex-direction: column; gap: 14px; }
+  .prof-settings { margin-top: 24px; display: flex; flex-direction: column; }
+
+  /* 区块标题：与工作台同款蓝色竖条 */
+  .pc-label {
+    display: block;
+    position: relative;
+    margin: 0 0 12px;
+    padding-left: 10px;
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 18px;
+    color: var(--van-text-color, #323233);
+  }
+  .pc-label::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 1px;
+    width: 4px;
+    height: 16px;
+    border-radius: 2px;
+    background: var(--van-primary-color);
+  }
+
+  /* 账户卡片：清掉移动端外边距，统一由 flex gap 控制间距 */
+  .prof-account .user-card,
+  .prof-account .stat-card,
+  .prof-account .quota-alert { margin: 0; }
+  .user-card {
+    gap: 14px;
+    padding: 20px 24px;
+    border: 1px solid var(--van-border-color, #ebedf0);
+    border-radius: 14px;
+  }
+  .avatar { width: 56px; height: 56px; font-size: 28px; }
+  .stat-card {
+    padding: 22px 0;
+    border: 1px solid var(--van-border-color, #ebedf0);
+    border-radius: 14px;
+  }
+  .stat-num { font-size: 24px; }
+  .quota-alert { border-radius: 10px; }
+
+  /* 设置组：去 inset 外边距，改成与工作台同款描边卡片，满宽拉伸 */
+  .prof-settings .settings-group { margin-top: 0; }
+  .prof-settings :deep(.van-cell-group--inset) {
+    margin: 0;
+    border: 1px solid var(--van-border-color, #ebedf0);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .prof-settings :deep(.van-cell) { padding: 15px 22px; }
+
+  /* 退出登录：设置卡下方左对齐定宽 */
+  .logout-wrap { width: 200px; margin: 18px 0 0; }
 }
 </style>

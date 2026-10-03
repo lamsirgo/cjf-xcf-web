@@ -1,5 +1,6 @@
 <template>
   <div class="page">
+    <h2 class="pc-head">任务</h2>
     <div class="top-bar">
       <van-nav-bar title="任务" />
       <div class="app-chips">
@@ -11,64 +12,67 @@
     </div>
 
     <van-pull-refresh v-model="refreshing" class="task-scroll" @refresh="onRefresh">
-      <!-- 首次加载骨架屏 -->
-      <template v-if="initialLoading">
-        <div v-for="i in 3" :key="i" class="pkg-card skeleton-card">
-          <van-skeleton title :row="2" animated />
-        </div>
-      </template>
-      <!-- 空状态：首屏加载完成且无数据（van-list 的“没有更多了”此时无意义） -->
-      <van-empty
-        v-if="!initialLoading && finished && list.length === 0"
-        description="暂无任务，去上传发票试试吧"
-      />
-      <van-list
-        v-else
-        v-model:loading="loading"
-        v-model:error="loadError"
-        :finished="finished"
-        finished-text="没有更多了"
-        error-text="加载失败，点击重试"
-        @load="onLoad"
-      >
-        <div v-for="p in list" :key="p.id" class="pkg-card">
-          <div class="pkg-head" @click="toggle(p)">
-            <div class="pkg-name">
-              <span class="fname">{{ p.filename }}</span>
-              <van-tag :type="tagType(p.status)">{{ p.status_text }}</van-tag>
+      <!-- 栅格包装层：仅承载布局，不触碰 PullRefresh 内部 track/head -->
+      <div class="task-grid">
+        <!-- 首次加载骨架屏 -->
+        <template v-if="initialLoading">
+          <div v-for="i in 3" :key="i" class="pkg-card skeleton-card">
+            <van-skeleton title :row="2" animated />
+          </div>
+        </template>
+        <!-- 空状态：首屏加载完成且无数据（van-list 的“没有更多了”此时无意义） -->
+        <van-empty
+          v-if="!initialLoading && finished && list.length === 0"
+          description="暂无任务，去上传发票试试吧"
+        />
+        <van-list
+          v-else
+          v-model:loading="loading"
+          v-model:error="loadError"
+          :finished="finished"
+          finished-text="没有更多了"
+          error-text="加载失败，点击重试"
+          @load="onLoad"
+        >
+          <div v-for="p in list" :key="p.id" class="pkg-card">
+            <div class="pkg-head" @click="toggle(p)">
+              <div class="pkg-name">
+                <span class="fname">{{ p.filename }}</span>
+                <van-tag :type="tagType(p.status)">{{ p.status_text }}</van-tag>
+              </div>
+              <div class="pkg-sub">
+                {{ p.success_files }}成功 / {{ p.failed_files }}失败<template v-if="p.duplicate_files"> / {{ p.duplicate_files }}重复</template> / 共{{ p.total_files }}张
+                <span v-if="p.queue_pos">· 排队第{{ p.queue_pos }}位</span>
+              </div>
+              <van-progress v-if="p.status === 0 || p.status === 1" :percentage="p.progress" />
+              <div v-if="p.status === 1 && p.done_files !== null" class="pkg-detail">
+                已解析 {{ p.done_files }} / {{ p.total_files }}
+              </div>
             </div>
-            <div class="pkg-sub">
-              {{ p.success_files }}成功 / {{ p.failed_files }}失败<template v-if="p.duplicate_files"> / {{ p.duplicate_files }}重复</template> / 共{{ p.total_files }}张
-              <span v-if="p.queue_pos">· 排队第{{ p.queue_pos }}位</span>
+            <div v-if="expanded === p.id" class="pkg-files">
+              <div v-for="f in files" :key="f.id" class="file-row">
+                <span class="f-name">{{ f.orig_path }}</span>
+                <van-tag :type="f.status_text === '成功' ? 'success' : f.status_text === '失败' ? 'danger' : 'primary'">
+                  {{ f.status_text }}
+                </van-tag>
+                <div v-if="f.fail_reason" class="f-err">{{ f.fail_reason }}</div>
+                <div v-if="f.fail_type" class="f-guide">{{ FAIL_GUIDE[f.fail_type] }}</div>
+              </div>
             </div>
-            <van-progress v-if="p.status === 0 || p.status === 1" :percentage="p.progress" />
-            <div v-if="p.status === 1 && p.done_files !== null" class="pkg-detail">
-              已解析 {{ p.done_files }} / {{ p.total_files }}
+            <div v-if="p.status === 3 || p.status === 4" class="pkg-actions">
+              <van-button
+                size="small"
+                plain
+                type="primary"
+                :loading="retryingId === p.id"
+                @click="onRetry(p)"
+              >
+                失败重试
+              </van-button>
             </div>
           </div>
-          <div v-if="expanded === p.id" class="pkg-files">
-            <div v-for="f in files" :key="f.id" class="file-row">
-              <span class="f-name">{{ f.orig_path }}</span>
-              <van-tag :type="f.status_text === '成功' ? 'success' : f.status_text === '失败' ? 'danger' : 'primary'">
-                {{ f.status_text }}
-              </van-tag>
-              <div v-if="f.fail_reason" class="f-err">{{ f.fail_reason }}</div>
-              <div v-if="f.fail_type" class="f-guide">{{ FAIL_GUIDE[f.fail_type] }}</div>
-            </div>
-          </div>
-          <div v-if="p.status === 3 || p.status === 4" class="pkg-actions">
-            <van-button
-              size="small"
-              plain
-              type="primary"
-              :loading="retryingId === p.id"
-              @click="onRetry(p)"
-            >
-              失败重试
-            </van-button>
-          </div>
-        </div>
-      </van-list>
+        </van-list>
+      </div>
     </van-pull-refresh>
   </div>
 </template>
@@ -316,6 +320,8 @@ onDeactivated(() => {
 </script>
 
 <style scoped>
+/* PC 专用页标题：移动端隐藏，由 NavBar 承担 */
+.pc-head { display: none; }
 .page {
   height: 100vh;
   display: flex;
@@ -364,24 +370,73 @@ onDeactivated(() => {
 .f-guide { color: var(--van-text-color-3, #969799); margin-top: 2px; }
 
 @media (min-width: 1024px) {
-  /* PC：侧边导航已提供标题/导航，隐藏页内 NavBar */
+  /* PC：侧边导航已提供标题/导航，隐藏页内 NavBar，改用大号页标题 */
   .top-bar :deep(.van-nav-bar) { display: none; }
-  .page { align-items: center; }
-  .top-bar, .task-scroll { width: 100%; max-width: 1080px; }
-  .task-scroll { padding-bottom: 24px; }
-  /* 卡片双列栅格 */
-  .task-scroll :deep(.van-list) {
+
+  /* 满宽拉伸，与工作台/我的页一致；取消 100vh 内部滚动，随主区文档流滚动 */
+  .page {
+    max-width: none;
+    height: auto;
+    padding: 26px 32px 40px;
+  }
+  .pc-head {
+    display: block;
+    margin: 4px 0 16px;
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--van-text-color, #323233);
+  }
+
+  /* 应用筛选 chips：去移动端灰底，作为标题下一行筛选条 */
+  .app-chips {
+    gap: 10px;
+    padding: 0 0 16px;
+    background: transparent;
+    overflow: visible;
+  }
+  .chip { padding: 6px 16px; font-size: 13px; cursor: pointer; transition: all .15s; }
+  .chip:not(.is-off):hover { background: #ecf5ff; }
+
+  .task-scroll {
+    flex: none;
+    overflow: visible;
+    padding-bottom: 0;
+  }
+  /* 栅格挂在自有包装层上（绝不改 PullRefresh 内部 track/head 的 display）。
+     骨架屏 / 空状态阶段：卡片与 empty 直接是 task-grid 的项目 */
+  .task-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-    padding: 12px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 14px;
     align-items: start;
   }
-  .task-scroll :deep(.van-list__loading),
-  .task-scroll :deep(.van-list__finished),
-  .task-scroll :deep(.van-list__error-text) {
+  /* 正常列表阶段：van-list 是 task-grid 唯一孩子，跨满两列后自身再做两列栅格 */
+  .task-grid :deep(.van-list) {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 14px;
+    align-items: start;
+  }
+  .task-grid :deep(.van-empty) { grid-column: 1 / -1; }
+  .task-grid :deep(.van-list__loading),
+  .task-grid :deep(.van-list__finished),
+  .task-grid :deep(.van-list__error-text) {
     grid-column: 1 / -1;
   }
-  .pkg-card { margin: 0; cursor: pointer; }
+
+  /* 任务卡：与工作台同款描边圆角卡 */
+  .pkg-card {
+    margin: 0;
+    padding: 16px 18px;
+    border: 1px solid var(--van-border-color, #ebedf0);
+    border-radius: 14px;
+    cursor: pointer;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .pkg-card:hover {
+    border-color: var(--van-primary-color);
+    box-shadow: 0 4px 14px rgba(31, 84, 198, .08);
+  }
 }
 </style>
