@@ -32,6 +32,8 @@
     <template v-else>
       <div v-if="dragging" class="drop-hint">松开即导入票据文件</div>
 
+      <div class="main-grid">
+      <div class="col-left">
       <!-- ① 导入 -->
       <div class="import-card" @click="triggerPick">
         <van-icon name="add-o" class="ic-add" />
@@ -107,7 +109,15 @@
         <PrintDecorPanel :state="state" :duplex-enabled="capabilities.duplex" />
       </div>
 
-      <!-- ④ 预览 -->
+      <!-- 隐私声明（G04） -->
+      <p class="privacy">
+        <van-icon name="shield-o" /> 票据全程在浏览器本地处理（排版、识别、导出），
+        <b>不上传服务器</b>；平台仅下发用量阈值并记录不含票面的导出页数。本地草稿按账号隔离并保留 7 天，可在「清空」中一键删除。<template v-if="appVersion">（应用版本 {{ appVersion }}）</template>
+      </p>
+      </div>
+
+      <!-- ④ 预览（PC 右栏 sticky） -->
+      <div class="col-right">
       <div class="card">
         <PrintPreview
           :sheets="sheets"
@@ -116,12 +126,8 @@
           @update:current="onCurrentChange"
         />
       </div>
-
-      <!-- 隐私声明（G04） -->
-      <p class="privacy">
-        <van-icon name="shield-o" /> 票据全程在浏览器本地处理（排版、识别、导出），
-        <b>不上传服务器</b>；平台仅下发用量阈值并记录不含票面的导出页数。本地草稿按账号隔离并保留 7 天，可在「清空」中一键删除。<template v-if="appVersion">（应用版本 {{ appVersion }}）</template>
-      </p>
+      </div>
+      </div>
     </template>
 
     <!-- ⑤ 导出 -->
@@ -1265,5 +1271,62 @@ onUnmounted(() => {
 .share-btn {
   flex: 0 0 52px;
   padding: 0;
+}
+
+/* ---------- PC 适配：左操作 / 右预览 sticky，保持原有交互不动 ---------- */
+.main-grid,
+.col-left,
+.col-right {
+  display: contents;
+}
+
+@media (min-width: 1024px) {
+  .page {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding-left: 24px;
+    padding-right: 24px;
+    border-left: 1px solid var(--van-border-color, #ebedf0);
+    border-right: 1px solid var(--van-border-color, #ebedf0);
+  }
+  .main-grid {
+    display: grid;
+    grid-template-columns: 1fr 400px;
+    gap: 20px;
+    align-items: start;
+    margin-top: 12px;
+  }
+  .col-left {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+  }
+  .col-right {
+    display: block;
+    position: sticky;
+    top: 12px;
+    max-height: calc(100vh - 12px - 12px - 68px); /* 视口 - 顶部间距 - 底部间距 - bottom-bar 高度 */
+    overflow-y: auto;
+  }
+  .col-left > .card,
+  .col-left > .import-card,
+  .col-left > .stat-row,
+  .col-left > .stats-card {
+    margin-top: 0;
+  }
+  .col-left > .privacy {
+    margin-top: 2px;
+  }
+  .col-right > .card {
+    margin-top: 0;
+  }
+  /* 底部导出栏居中，避免整宽贴边 */
+  .bottom-bar {
+    max-width: 1032px; /* page max-width 1080 - 24*2 padding */
+    margin: 0 auto;
+    border-radius: 12px 12px 0 0;
+    box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.08);
+  }
 }
 </style>

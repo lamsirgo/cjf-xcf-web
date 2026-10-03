@@ -115,4 +115,10 @@ function onRefresh() {
   font-size: 12px;
   color: var(--van-text-color-3, #969799);
 }
+
+/* ---------- PC 适配：内容限宽居中 ---------- */
+@media (min-width: 1024px) {
+  .page { max-width: 720px; margin: 0 auto; }
+  .log-card { margin-left: 0; margin-right: 0; }
+}
 </style>

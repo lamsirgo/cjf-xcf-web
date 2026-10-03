@@ -55,3 +55,56 @@ html.van-theme-dark .tile.is-beta .tic { background: #3a2a14 !important; color: 
 /* 发票详情：失败原因卡片（浅色主题为琥珀色系） */
 html.van-theme-dark .fail-card { background: #2a2a2a !important; border-color: #5c4a1a !important; }
 html.van-theme-dark .fail-head { color: #e6a23c !important; }
+
+/* PC 端深色模式覆盖 */
+html.van-theme-dark .pc-side-nav,
+html.van-theme-dark .inv-table,
+html.van-theme-dark .inv-side-panel,
+html.van-theme-dark .manage-bar {
+  background: #2a2a2a !important;
+  border-color: #3a3a3a !important;
+}
+html.van-theme-dark .side-item { color: #c0c0c0 !important; }
+html.van-theme-dark .side-item:hover { background: #3a3a3a !important; }
+html.van-theme-dark .side-item.active { background: #1a3a5c !important; color: #409eff !important; }
+html.van-theme-dark .side-logo { color: #f5f5f5 !important; }
+html.van-theme-dark .side-user { color: #a0a0a0 !important; }
+html.van-theme-dark .inv-row { color: #f5f5f5 !important; border-top-color: #3a3a3a !important; }
+html.van-theme-dark .inv-row:hover { background: #3a3a3a !important; }
+html.van-theme-dark .inv-row.active { background: #1a3a5c !important; }
+html.van-theme-dark .inv-row.inv-head { background: #222 !important; color: #a0a0a0 !important; }
+html.van-theme-dark .inv-side-panel .panel-head,
+html.van-theme-dark .inv-side-panel .kv,
+html.van-theme-dark .inv-side-panel .panel-foot { border-color: #3a3a3a !important; }
+html.van-theme-dark .inv-side-panel .panel-title,
+html.van-theme-dark .inv-side-panel .num,
+html.van-theme-dark .inv-side-panel .kv,
+html.van-theme-dark .inv-side-panel .item-name { color: #f5f5f5 !important; }
+html.van-theme-dark .inv-side-panel .kv .k,
+html.van-theme-dark .inv-side-panel .item-sub,
+html.van-theme-dark .inv-side-panel .panel-close { color: #a0a0a0 !important; }
+
+/* ============ PC 端适配（≥1024px） ============ */
+.pc-side-nav { display: none; }
+
+@media (min-width: 1024px) {
+  /* 内容区居中限宽 */
+  .pc-container {
+    max-width: 1080px;
+    margin: 0 auto;
+  }
+  .pc-container-narrow {
+    max-width: 720px;
+    margin: 0 auto;
+  }
+
+  /* Vant 底部弹层在 PC 上收窄居中（不用 transform，避免与滑入动画冲突） */
+  .van-popup--bottom {
+    left: 50%;
+    width: 640px;
+    margin-left: -320px;
+  }
+  .van-popup--round.van-popup--bottom {
+    border-radius: 16px 16px 0 0;
+  }
+}

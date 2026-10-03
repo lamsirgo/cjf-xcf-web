@@ -362,4 +362,26 @@ onDeactivated(() => {
 .f-name { margin-right: 8px; }
 .f-err { color: var(--van-danger-color); margin-top: 2px; word-break: break-all; }
 .f-guide { color: var(--van-text-color-3, #969799); margin-top: 2px; }
+
+@media (min-width: 1024px) {
+  /* PC：侧边导航已提供标题/导航，隐藏页内 NavBar */
+  .top-bar :deep(.van-nav-bar) { display: none; }
+  .page { align-items: center; }
+  .top-bar, .task-scroll { width: 100%; max-width: 1080px; }
+  .task-scroll { padding-bottom: 24px; }
+  /* 卡片双列栅格 */
+  .task-scroll :deep(.van-list) {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    padding: 12px;
+    align-items: start;
+  }
+  .task-scroll :deep(.van-list__loading),
+  .task-scroll :deep(.van-list__finished),
+  .task-scroll :deep(.van-list__error-text) {
+    grid-column: 1 / -1;
+  }
+  .pkg-card { margin: 0; cursor: pointer; }
+}
 </style>

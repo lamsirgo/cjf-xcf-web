@@ -1,5 +1,5 @@
 <template>
-  <div class="page">
+  <div class="page pc-container">
     <div class="greet-row">
       <div class="greet">
         <p class="hi">{{ greeting }}</p>
@@ -17,62 +17,64 @@
       </div>
     </div>
 
-    <!-- 常用应用（动态读取，默认选中：is_default 应用） -->
-    <section class="block">
-      <div class="sec-head">
-        <span class="sec-title">常用应用</span>
-      </div>
-      <div v-if="apps.length === 0" class="empty">应用加载中…</div>
-      <div class="app-grid">
-        <div
-          v-for="a in apps"
-          :key="a.id"
-          class="tile"
-          :class="{ 'is-selected': a.is_default === 1, 'is-off': !a.usable, 'is-beta': a.is_beta }"
-          @click="openApp(a)"
-        >
-          <span class="tic"><van-icon :name="a.icon || 'apps-o'" /></span>
-          <span class="tname">{{ a.name }}</span>
-          <span v-if="a.is_beta" class="beta-tag">内测</span>
+    <div class="pc-cols">
+      <!-- 常用应用（动态读取，默认选中：is_default 应用） -->
+      <section class="block sec-apps">
+        <div class="sec-head">
+          <span class="sec-title">常用应用</span>
         </div>
-      </div>
-    </section>
+        <div v-if="apps.length === 0" class="empty">应用加载中…</div>
+        <div class="app-grid">
+          <div
+            v-for="a in apps"
+            :key="a.id"
+            class="tile"
+            :class="{ 'is-selected': a.is_default === 1, 'is-off': !a.usable, 'is-beta': a.is_beta }"
+            @click="openApp(a)"
+          >
+            <span class="tic"><van-icon :name="a.icon || 'apps-o'" /></span>
+            <span class="tname">{{ a.name }}</span>
+            <span v-if="a.is_beta" class="beta-tag">内测</span>
+          </div>
+        </div>
+      </section>
 
-    <!-- 剩余识别额度 -->
-    <section class="block">
-      <div class="quota-card">
-        <div class="q-label">剩余识别额度</div>
-        <div class="q-num">{{ auth.user?.quota_balance ?? '-' }}<span class="q-unit">次</span></div>
-        <div v-if="lowQuota" class="q-warn">
-          <van-icon name="warning-o" /> 额度不足，请及时联系管理员
+      <!-- 剩余识别额度 -->
+      <section class="block sec-quota">
+        <div class="quota-card">
+          <div class="q-label">剩余识别额度</div>
+          <div class="q-num">{{ auth.user?.quota_balance ?? '-' }}<span class="q-unit">次</span></div>
+          <div v-if="lowQuota" class="q-warn">
+            <van-icon name="warning-o" /> 额度不足，请及时联系管理员
+          </div>
+          <div v-else class="q-foot">
+            <span>额度不足请联系管理员</span>
+            <span class="q-go" @click="openDefault">去识别 ›</span>
+          </div>
         </div>
-        <div v-else class="q-foot">
-          <span>额度不足请联系管理员</span>
-          <span class="q-go" @click="openDefault">去识别 ›</span>
-        </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- 最近任务 -->
-    <section class="block">
-      <div class="sec-head">
-        <span class="sec-title">最近任务</span>
-        <span class="sec-link" @click="router.push('/tasks')">查看全部 ›</span>
-      </div>
-      <div v-if="recent.length === 0" class="empty">暂无任务，去上传一个压缩包吧</div>
-      <div v-for="p in recent" :key="p.id" class="task-card" @click="router.push('/tasks')">
-        <div class="task-top">
-          <span class="task-name">{{ p.filename }}</span>
-          <van-tag :type="tagType(p.status)">{{ p.status_text }}</van-tag>
+      <!-- 最近任务 -->
+      <section class="block sec-recent">
+        <div class="sec-head">
+          <span class="sec-title">最近任务</span>
+          <span class="sec-link" @click="router.push('/tasks')">查看全部 ›</span>
         </div>
-        <van-progress v-if="p.status === 0 || p.status === 1" :percentage="p.progress" class="task-bar" />
-        <div class="task-sub">
-          {{ p.success_files }}成功 / {{ p.failed_files }}失败 / 共{{ p.total_files }}张
-          <span v-if="p.queue_pos">· 排队第{{ p.queue_pos }}位</span>
-          · {{ fmtTime(p.created_at) }}
+        <div v-if="recent.length === 0" class="empty">暂无任务，去上传一个压缩包吧</div>
+        <div v-for="p in recent" :key="p.id" class="task-card" @click="router.push('/tasks')">
+          <div class="task-top">
+            <span class="task-name">{{ p.filename }}</span>
+            <van-tag :type="tagType(p.status)">{{ p.status_text }}</van-tag>
+          </div>
+          <van-progress v-if="p.status === 0 || p.status === 1" :percentage="p.progress" class="task-bar" />
+          <div class="task-sub">
+            {{ p.success_files }}成功 / {{ p.failed_files }}失败 / 共{{ p.total_files }}张
+            <span v-if="p.queue_pos">· 排队第{{ p.queue_pos }}位</span>
+            · {{ fmtTime(p.created_at) }}
+          </div>
         </div>
-      </div>
-    </section>
+      </section>
+    </div>
   </div>
 </template>
 
@@ -290,4 +292,23 @@ onActivated(async () => {
 .task-name { font-size: 14px; font-weight: 600; word-break: break-all; }
 .task-bar { margin-top: 8px; }
 .task-sub { margin-top: 6px; font-size: 12px; color: var(--van-text-color-3, #969799); }
+
+@media (min-width: 1024px) {
+  .pc-cols {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    grid-template-areas:
+      "apps quota"
+      "recent quota";
+    gap: 16px;
+    align-items: start;
+  }
+  .sec-apps { grid-area: apps; margin-top: 0; }
+  .sec-quota { grid-area: quota; margin-top: 0; }
+  .sec-recent { grid-area: recent; margin-top: 0; }
+  .app-grid { grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .tile { padding: 18px 8px 14px; cursor: pointer; }
+  .task-card { cursor: pointer; }
+  .q-go, .sec-link { cursor: pointer; }
+}
 </style>

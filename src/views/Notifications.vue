@@ -134,4 +134,10 @@ onNotifyEvent((event) => {
 }
 .n-actions { margin-top: 8px; }
 .n-time { margin: 6px 0 0; font-size: 12px; color: var(--van-text-color-3, #969799); }
+
+/* ---------- PC 适配：内容限宽居中 ---------- */
+@media (min-width: 1024px) {
+  .page { max-width: 720px; margin: 0 auto; }
+  .notice-card { margin-left: 0; margin-right: 0; }
+}
 </style>

@@ -3,64 +3,70 @@
     <van-nav-bar title="发票详情" left-arrow @click-left="$router.back()" />
     <van-loading v-if="loading" class="center" />
     <template v-else-if="inv">
-      <!-- 原图预览 -->
-      <van-cell-group inset style="margin-top: 12px">
-        <template v-if="rawUrl && isImage">
-          <div class="raw-wrap" @click="previewImage">
-            <img :src="rawUrl" class="raw-img" alt="发票原图" />
-            <span class="raw-tip">点击放大</span>
+      <div class="detail-cols">
+        <div class="detail-col-l">
+          <!-- 原图预览 -->
+          <van-cell-group inset style="margin-top: 12px">
+            <template v-if="rawUrl && isImage">
+              <div class="raw-wrap" @click="previewImage">
+                <img :src="rawUrl" class="raw-img" alt="发票原图" />
+                <span class="raw-tip">点击放大</span>
+              </div>
+            </template>
+            <van-cell v-else-if="inv.has_file" title="原文件" is-link @click="openRaw">
+              <template #right-icon>
+                <span class="raw-link">{{ inv.file_ext === 'pdf' ? '查看 PDF' : '查看原图' }}</span>
+              </template>
+            </van-cell>
+            <van-cell v-else title="原文件" value="已过保留期被清理" />
+          </van-cell-group>
+
+          <!-- 失败分类与重试指引 -->
+          <div v-if="inv.fail_type" class="fail-card">
+            <div class="fail-head">
+              <van-icon name="warning-o" />
+              <span>{{ FAIL_TYPE_TEXT[inv.fail_type] || '解析失败' }}</span>
+            </div>
+            <p v-if="inv.fail_reason" class="fail-reason">{{ inv.fail_reason }}</p>
+            <p class="fail-guide">{{ FAIL_GUIDE[inv.fail_type] }}</p>
+            <van-button size="small" type="primary" plain block @click="router.push('/tasks')">
+              前往任务页重试
+            </van-button>
           </div>
-        </template>
-        <van-cell v-else-if="inv.has_file" title="原文件" is-link @click="openRaw">
-          <template #right-icon>
-            <span class="raw-link">{{ inv.file_ext === 'pdf' ? '查看 PDF' : '查看原图' }}</span>
-          </template>
-        </van-cell>
-        <van-cell v-else title="原文件" value="已过保留期被清理" />
-      </van-cell-group>
-
-      <!-- 失败分类与重试指引 -->
-      <div v-if="inv.fail_type" class="fail-card">
-        <div class="fail-head">
-          <van-icon name="warning-o" />
-          <span>{{ FAIL_TYPE_TEXT[inv.fail_type] || '解析失败' }}</span>
         </div>
-        <p v-if="inv.fail_reason" class="fail-reason">{{ inv.fail_reason }}</p>
-        <p class="fail-guide">{{ FAIL_GUIDE[inv.fail_type] }}</p>
-        <van-button size="small" type="primary" plain block @click="router.push('/tasks')">
-          前往任务页重试
-        </van-button>
-      </div>
 
-      <van-cell-group inset style="margin-top: 12px">
-        <van-cell title="发票号码" :value="inv.invoice_num || '—'" />
-        <van-cell title="发票代码" :value="inv.invoice_code || '—'" />
-        <van-cell title="发票类型" :value="inv.invoice_type || '—'" />
-        <van-cell title="开票日期" :value="fmtDateTime(inv.invoice_date)" />
-        <van-cell title="价税合计" :value="`¥${Number(inv.total_amount ?? 0).toFixed(2)}`" value-class="amount" />
-      </van-cell-group>
-      <van-cell-group inset style="margin-top: 12px">
-        <van-cell title="购买方" :label="inv.purchaser_name || '—'" />
-        <van-cell title="购买方税号" :value="inv.purchaser_register_num || '—'" />
-        <van-cell title="销售方" :label="inv.seller_name || '—'" />
-        <van-cell title="销售方税号" :value="inv.seller_register_num || '—'" />
-      </van-cell-group>
-      <div class="section">货物明细</div>
-      <div v-for="(item, i) in inv.items || []" :key="i" class="item-card">
-        <div class="i-name">{{ item.commodity_name || '—' }}</div>
-        <div class="i-grid">
-          <span>规格: {{ item.commodity_type || '—' }}</span>
-          <span>单位: {{ item.commodity_unit || '—' }}</span>
-          <span>数量: {{ item.commodity_num || '—' }}</span>
-          <span>单价: {{ item.commodity_price || '—' }}</span>
-          <span>金额: {{ item.commodity_amount || '—' }}</span>
-          <span>税率: {{ item.commodity_tax_rate || '—' }}</span>
+        <div class="detail-col-r">
+          <van-cell-group inset style="margin-top: 12px">
+            <van-cell title="发票号码" :value="inv.invoice_num || '—'" />
+            <van-cell title="发票代码" :value="inv.invoice_code || '—'" />
+            <van-cell title="发票类型" :value="inv.invoice_type || '—'" />
+            <van-cell title="开票日期" :value="fmtDateTime(inv.invoice_date)" />
+            <van-cell title="价税合计" :value="`¥${Number(inv.total_amount ?? 0).toFixed(2)}`" value-class="amount" />
+          </van-cell-group>
+          <van-cell-group inset style="margin-top: 12px">
+            <van-cell title="购买方" :label="inv.purchaser_name || '—'" />
+            <van-cell title="购买方税号" :value="inv.purchaser_register_num || '—'" />
+            <van-cell title="销售方" :label="inv.seller_name || '—'" />
+            <van-cell title="销售方税号" :value="inv.seller_register_num || '—'" />
+          </van-cell-group>
+          <div class="section">货物明细</div>
+          <div v-for="(item, i) in inv.items || []" :key="i" class="item-card">
+            <div class="i-name">{{ item.commodity_name || '—' }}</div>
+            <div class="i-grid">
+              <span>规格: {{ item.commodity_type || '—' }}</span>
+              <span>单位: {{ item.commodity_unit || '—' }}</span>
+              <span>数量: {{ item.commodity_num || '—' }}</span>
+              <span>单价: {{ item.commodity_price || '—' }}</span>
+              <span>金额: {{ item.commodity_amount || '—' }}</span>
+              <span>税率: {{ item.commodity_tax_rate || '—' }}</span>
+            </div>
+          </div>
+
+          <div class="btn-wrap">
+            <van-button type="primary" block @click="openEdit">校正字段</van-button>
+            <van-button plain type="danger" block style="margin-top: 10px" @click="onDelete">删除该发票</van-button>
+          </div>
         </div>
-      </div>
-
-      <div class="btn-wrap">
-        <van-button type="primary" block @click="openEdit">校正字段</van-button>
-        <van-button plain type="danger" block style="margin-top: 10px" @click="onDelete">删除该发票</van-button>
       </div>
     </template>
     <div v-else class="error-block">
@@ -308,6 +314,9 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+/* 移动端默认：保持 DOM 顺序（原图 → 失败卡 → 字段 → 明细 → 按钮） */
+.detail-col-l, .detail-col-r { display: contents; }
+
 .center { display: flex; justify-content: center; padding-top: 120px; }
 .amount { color: var(--van-danger-color); }
 .section { margin: 16px 16px 0; font-weight: 600; }
@@ -364,4 +373,32 @@ onMounted(async () => {
 }
 .del-icon { color: var(--van-danger-color); font-size: 16px; }
 .edit-foot { display: flex; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--van-border-color, #ebedf0); }
+
+/* ---------- PC 适配：左图右表 ---------- */
+@media (min-width: 1024px) {
+  .detail-cols {
+    display: grid;
+    grid-template-columns: 420px 1fr;
+    grid-template-areas: "col-l col-r";
+    gap: 20px;
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 0 20px 24px;
+    align-items: start;
+  }
+  .detail-col-l { display: block; grid-area: col-l; position: sticky; top: 16px; }
+  .detail-col-r { display: block; grid-area: col-r; min-width: 0; }
+
+  /* 移动端用的左右 16px 外边距在 grid 里统一由容器控制 */
+  .detail-cols .section { margin-left: 0; margin-right: 0; }
+  .detail-cols .item-card { margin-left: 0; margin-right: 0; }
+  .detail-cols .fail-card { margin-left: 0; margin-right: 0; }
+  .detail-cols .btn-wrap { margin-left: 0; margin-right: 0; }
+
+  .detail-cols :deep(.van-cell-group--inset) { margin-left: 0; margin-right: 0; }
+}
+
+@media (min-width: 1440px) {
+  .detail-cols { grid-template-columns: 480px 1fr; max-width: 1180px; }
+}
 </style>

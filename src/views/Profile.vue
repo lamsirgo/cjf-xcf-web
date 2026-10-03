@@ -382,4 +382,14 @@ html.van-theme-dark .quota-alert {
 .about { padding: 8px 16px 20px; text-align: center; color: var(--van-text-color-3, #969799); font-size: 12px; }
 .about p { margin: 4px 0; }
 .about-name { font-size: 15px; font-weight: 600; color: var(--van-text-color, #323233); }
+
+/* ---------- PC 适配：内容限宽居中 ---------- */
+@media (min-width: 1024px) {
+  .page { max-width: 720px; margin: 0 auto; padding-left: 0; padding-right: 0; }
+  .page .user-card,
+  .page .stat-card,
+  .page .quota-alert { margin-left: 0; margin-right: 0; }
+  .page :deep(.van-cell-group--inset) { margin-left: 0; margin-right: 0; }
+  .page > div[style*="margin: 24px 16px"] { margin-left: 0 !important; margin-right: 0 !important; }
+}
 </style>

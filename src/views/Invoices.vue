@@ -39,32 +39,75 @@
         error-text="加载失败，点击重试"
         @load="onLoad"
       >
-        <div
-          v-for="inv in list"
-          :key="inv.id"
-          class="inv-card"
-          :class="{ dup: inv.duplicate, selected: manageMode && selectedIds.has(inv.id) }"
-          @click="onCardClick(inv)"
-        >
-          <van-icon
-            v-if="manageMode"
-            :name="selectedIds.has(inv.id) ? 'success' : 'circle'"
-            class="check-icon"
-            :class="{ active: selectedIds.has(inv.id) }"
-          />
-          <div class="row1">
-            <span class="no">{{ inv.invoice_num || '（无号码）' }}</span>
-            <span class="amount">¥{{ Number(inv.total_amount ?? 0).toFixed(2) }}</span>
+        <!-- PC：表格布局 + 点击行右侧滑出详情 -->
+        <template v-if="isPc">
+          <div class="inv-table" :class="{ managing: manageMode }">
+            <div class="inv-row inv-head">
+              <span v-if="manageMode" class="c-check"></span>
+              <span class="c-num">发票号码</span>
+              <span class="c-amt">金额</span>
+              <span class="c-party">销售方 → 购买方</span>
+              <span class="c-date">开票日期</span>
+              <span class="c-status">状态</span>
+            </div>
+            <div
+              v-for="inv in list"
+              :key="inv.id"
+              class="inv-row"
+              :class="{ selected: manageMode && selectedIds.has(inv.id), active: panelId === inv.id && panelShow }"
+              @click="onCardClick(inv)"
+            >
+              <span v-if="manageMode" class="c-check">
+                <van-icon
+                  :name="selectedIds.has(inv.id) ? 'success' : 'circle'"
+                  class="check-icon"
+                  :class="{ active: selectedIds.has(inv.id) }"
+                />
+              </span>
+              <span class="c-num mono">{{ inv.invoice_num || '（无号码）' }}</span>
+              <span class="c-amt mono amount">¥{{ Number(inv.total_amount ?? 0).toFixed(2) }}</span>
+              <span class="c-party">{{ inv.seller_name || '—' }} → {{ inv.purchaser_name || '—' }}</span>
+              <span class="c-date">{{ fmtDateTime(inv.invoice_date) }}</span>
+              <span class="c-status">
+                <van-tag v-if="inv.duplicate" type="danger" plain>{{ inv.dup_count > 1 ? `重复×${inv.dup_count}` : '重复' }}</van-tag>
+                <van-tag :type="inv.result === '成功' ? 'success' : 'danger'">{{ inv.result }}</van-tag>
+              </span>
+            </div>
           </div>
-          <div class="row2">{{ inv.seller_name || '—' }} → {{ inv.purchaser_name || '—' }}</div>
-          <div class="row3">
-            <span>{{ fmtDateTime(inv.invoice_date) }}</span>
-            <van-tag v-if="inv.duplicate" type="danger" plain>{{ inv.dup_count > 1 ? `重复×${inv.dup_count}` : '重复' }}</van-tag>
-            <van-tag :type="inv.result === '成功' ? 'success' : 'danger'">{{ inv.result }}</van-tag>
+        </template>
+
+        <!-- 移动端：卡片流 -->
+        <template v-else>
+          <div
+            v-for="inv in list"
+            :key="inv.id"
+            class="inv-card"
+            :class="{ dup: inv.duplicate, selected: manageMode && selectedIds.has(inv.id) }"
+            @click="onCardClick(inv)"
+          >
+            <van-icon
+              v-if="manageMode"
+              :name="selectedIds.has(inv.id) ? 'success' : 'circle'"
+              class="check-icon"
+              :class="{ active: selectedIds.has(inv.id) }"
+            />
+            <div class="row1">
+              <span class="no">{{ inv.invoice_num || '（无号码）' }}</span>
+              <span class="amount">¥{{ Number(inv.total_amount ?? 0).toFixed(2) }}</span>
+            </div>
+            <div class="row2">{{ inv.seller_name || '—' }} → {{ inv.purchaser_name || '—' }}</div>
+            <div class="row3">
+              <span>{{ fmtDateTime(inv.invoice_date) }}</span>
+              <van-tag v-if="inv.duplicate" type="danger" plain>{{ inv.dup_count > 1 ? `重复×${inv.dup_count}` : '重复' }}</van-tag>
+              <van-tag :type="inv.result === '成功' ? 'success' : 'danger'">{{ inv.result }}</van-tag>
+            </div>
           </div>
-        </div>
+        </template>
       </van-list>
     </div>
+
+    <!-- PC 端发票详情侧滑面板 -->
+    <InvoiceSidePanel v-model:show="panelShow" :invoice-id="panelId" @deleted="onPanelDeleted" />
 
     <!-- 批量管理底栏：软删除发票 -->
     <div v-if="manageMode" class="manage-bar van-safe-area-bottom">
@@ -134,8 +177,20 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { showConfirmDialog, showToast } from 'vant'
 import { deleteInvoices, listInvoices, createExport, type InvoiceRow } from '@/api/invoices'
+import { useIsPc } from '@/composables/use-media-query'
+import InvoiceSidePanel from '@/components/InvoiceSidePanel.vue'
 
 const router = useRouter()
+const isPc = useIsPc()
+
+// ---------- PC 端详情侧滑面板 ----------
+const panelShow = ref(false)
+const panelId = ref<number | null>(null)
+
+function onPanelDeleted(id: number) {
+  showToast('已删除')
+  list.value = list.value.filter((inv) => inv.id !== id)
+}
 
 const keywords = ref('')
 const result = ref('')
@@ -274,6 +329,7 @@ function onSearch() {
   loadError.value = false
   list.value = []
   selectedIds.value = new Set()
+  panelShow.value = false
   loading.value = true
   load()
 }
@@ -355,6 +411,12 @@ function onCardClick(inv: InvoiceRow) {
     if (next.has(inv.id)) next.delete(inv.id)
     else next.add(inv.id)
     selectedIds.value = next
+    return
+  }
+  // PC：右侧滑出详情；移动端：跳转详情页
+  if (isPc.value) {
+    panelId.value = inv.id
+    panelShow.value = true
     return
   }
   router.push(`/app/invoice/${inv.id}`)
@@ -503,5 +565,39 @@ async function onBatchDelete() {
   padding: 8px 16px;
   background: var(--van-background-2, #fff);
   box-shadow: 0 -2px 12px rgba(100, 101, 102, 0.12);
+}
+
+/* ============ PC 端：表格 + 居中限宽 ============ */
+@media (min-width: 1024px) {
+  .page { padding: 0 24px; align-items: center; }
+  .filter-bar { width: 100%; max-width: 1080px; }
+  .list-wrap { width: 100%; max-width: 1080px; padding-bottom: 24px; }
+  .inv-table { background: var(--van-background-2, #fff); border-radius: 8px; border: 1px solid var(--van-border-color, #ebedf0); overflow: hidden; }
+  .inv-row {
+    display: grid;
+    grid-template-columns: 160px 100px 1fr 110px 120px;
+    gap: 12px;
+    align-items: center;
+    padding: 10px 16px;
+    border-top: 1px solid var(--van-border-color, #ebedf0);
+    font-size: 13px;
+    color: var(--van-text-color, #323233);
+    cursor: pointer;
+    transition: background .12s;
+  }
+  .inv-row:first-child { border-top: none; }
+  .inv-row:hover { background: var(--van-background-3, #f2f3f5); }
+  .inv-row.active { background: #ecf5ff; }
+  .inv-row.selected { outline: 2px solid var(--van-primary-color, #1989fa); }
+  .inv-row.inv-head {
+    background: var(--van-background-3, #f2f3f5);
+    font-weight: 500;
+    color: var(--van-text-color-2, #646566);
+    cursor: default;
+  }
+  .inv-table.managing .inv-row { grid-template-columns: 36px 160px 100px 1fr 110px 120px; }
+  .c-check { justify-self: center; }
+  .mono { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
+  .amount { color: var(--van-danger-color); }
 }
 </style>

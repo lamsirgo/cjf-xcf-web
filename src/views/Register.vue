@@ -69,4 +69,28 @@ async function onSubmit() {
 .captcha { height: 32px; border-radius: 4px; }
 .submit-wrap { margin: 24px 16px; text-align: center; }
 .link { display: inline-block; margin-top: 16px; color: var(--van-primary-color); font-size: 14px; }
+
+/* ---------- PC 适配：居中卡片（隐藏导航，由卡片标题表达） ---------- */
+@media (min-width: 1024px) {
+  .auth-page {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: var(--van-background, #f6f7f9);
+    padding: 24px 0;
+  }
+  .auth-page :deep(.van-nav-bar) { display: none; }
+  .auth-page :deep(.van-form) {
+    width: 400px;
+    background: var(--van-background-2, #fff);
+    border-radius: 12px;
+    padding: 24px 24px 20px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+    box-sizing: border-box;
+  }
+  .auth-page :deep(.van-cell-group--inset) { margin-left: 0; margin-right: 0; border-radius: 8px; }
+  .submit-wrap { margin: 20px 0 0; }
+}
 </style>
